@@ -1,6 +1,6 @@
-Cache for Windows^INT^zmgsi
+Cache for Windows^INT^zmgsi^~Format=Cache.S~^RAW
 %RO on 23 Jul 2020 01:00 AM
-%zmgsi
+%zmgsi^INT^1^65583,59417.0^0
 %zmgsi ;(CM) Service Integration - Core Server
  ;
  ;  ----------------------------------------------------------------------------
@@ -327,7 +327,7 @@ ylink ; link all routines
  q
  ;
 
-%zmgsis
+%zmgsis^INT^1^65583,59417.0^0
 %zmgsis ;(CM) Service Integration - Child Process
  ;
  ;  ----------------------------------------------------------------------------
