@@ -31,6 +31,9 @@
 Version 1.0.1 21 July 2020:
    First release.
 
+Version 1.0.2 31 July 2020:
+   Improve the parsing and validation of the mg_web configuration file (mgweb.conf).
+
 */
 
 
