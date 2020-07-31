@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-21 July 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+31 July 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 1.0; Revision 1.
+* Current Release: Version: 1.0; Revision 2.
 * This is the first release and very much 'a work in progress'.  Proceed with care!
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
@@ -101,3 +101,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v1.0.1 (21 July 2020)
 
 * Initial Release
+
+### v1.0.2 (31 July 2020)
+
+* Improve the parsing and validation of the **mg\_web** configuration file (mgweb.conf).
