@@ -1014,7 +1014,7 @@ typedef struct tagMGSYS {
    int            timeout;
    char           module_file[256];
    char           config_file[256];
-   char           config_error[256];
+   char           config_error[512];
    char           *config;
    DBXLOG         *plog;
    char           cgi_base[64];

@@ -75,9 +75,15 @@ __try {
 
    if (!mg_server || !mg_path || mg_system.config_error[0]) {
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
+      if (mg_system.config_error[0]) {
+         pweb->response_clen = (int) strlen(mg_system.config_error);
+         pweb->response_content = mg_system.config_error;
+      }
       mg_web_http_error(pweb, 500);
       mg_submit_headers(pweb);
-      mg_log_event(pweb->plog, "No valid configuration found", "mg_web: error", 0);
+      if (pweb->response_clen && pweb->response_content) {
+         mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) pweb->response_clen);
+      }
       return CACHE_FAILURE;
    }
 
@@ -1009,13 +1015,18 @@ int mg_release_request_memory(MGWEB *pweb)
 int mg_worker_init()
 {
 #if defined(_WIN32)
-   int n, lenx;
+   int n;
 #endif
-   int len;
+   int len, lenx;
    unsigned int size, size_default;
+   unsigned long count;
    char *pa, *pz;
    char buffer[2048];
    FILE *fp;
+
+#ifdef _WIN32
+__try {
+#endif
 
 #if defined(_WIN32)
    if (!mg_system.config_file[0]) {
@@ -1045,18 +1056,27 @@ int mg_worker_init()
    sprintf(buffer, "configuration: %s", mg_system.config_file);
    mg_log_event(&(mg_system.log), buffer, "mg_web: worker initialization", 0);
 
-   strcpy(mg_system.cgi_base, DBX_CGI_BASE);
+   strncpy(mg_system.cgi_base, DBX_CGI_BASE, 60);
+   mg_system.cgi_base[60] = '\0';
    mg_system.cgi_max = 0;
    pa = mg_system.cgi_base;
    pz = strstr(pa, "\n");
    while (pz && *pa) {
       *pz = '\0';
       mg_system.cgi[mg_system.cgi_max ++] = pa;
+      if (mg_system.cgi_max > 8) {
+         break;
+      }
       pa = (pz + 1);
       pz = strstr(pa, "\n");
    }
 
    size = mg_file_size(mg_system.config_file);
+   if (size > 64000) {
+      sprintf(mg_system.config_error, "Oversize configuration file (%d Bytes)", size);
+      mg_log_event(&(mg_system.log), mg_system.config_error, "mg_web: configuration error", 0);
+      size = 0;
+   }
    size_default = (unsigned int) strlen(MG_DEFAULT_CONFIG);
 /*
 {
@@ -1074,15 +1094,29 @@ int mg_worker_init()
       fp = fopen(mg_system.config_file, "r");
       if (fp) {
          len = 0;
-         for (;;) {
-            if (fgets(mg_system.config + len, size, fp) == NULL) {
+         lenx = 0;
+         count = 0;
+         while (fgets(buffer, 512, fp) != NULL) {
+            len = (int) strlen(buffer);
+            if (len) {
+               if ((len + lenx) <= (int) size) {
+                  strcat(mg_system.config, buffer);
+               }
+               lenx += len;
+               mg_system.config[lenx] = '\0';
+            }
+            count ++;
+            if (count > 100000) {
+               sprintf(mg_system.config_error, "Possible infinite loop reading the configuration file (%s)", mg_system.config_file);
+               mg_log_event(&(mg_system.log), mg_system.config_error, "mg_web: configuration error", 0);
                break;
             }
-            len = (int) strlen(mg_system.config);
          }
          fclose(fp);
       }
       else {
+         sprintf(mg_system.config_error, "Cannot read the configuration file (%s)", mg_system.config_file);
+         mg_log_event(&(mg_system.log), mg_system.config_error, "mg_web: configuration error", 0);
          strcpy(mg_system.config, MG_DEFAULT_CONFIG);
          size = size_default;
       }
@@ -1090,6 +1124,10 @@ int mg_worker_init()
    else {
       strcpy(mg_system.config, MG_DEFAULT_CONFIG);
       size = size_default;
+   }
+
+   if (mg_system.config_error[0]) {
+      return -1;
    }
 
    mg_system.config_size = size;
@@ -1105,6 +1143,28 @@ int mg_worker_init()
    }
 
    return 0;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_worker_init: %x", code);
+      strcpy(mg_system.config_error, bufferx);
+      mg_log_event(&(mg_system.log), bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER ) {
+      ;
+   }
+
+   return 0;
+}
+#endif
+
 }
 
 
@@ -1118,7 +1178,7 @@ int mg_worker_exit()
 int mg_parse_config()
 {
    int wn, ln, n, len, size, inserver, inpath, incgi, eos;
-   char *pa, *pz;
+   char *pa, *pz, *peol;
    char *word[256];
    MGSRV *psrv, *psrv_prev;
    MGPATH *ppath, *ppath_prev;
@@ -1138,27 +1198,49 @@ __try {
    size = 0;
    ln = 0;
    pa = mg_system.config;
-   for (;;) {
+   while (pa) {
       ln ++;
+      if (ln > 1000) {
+         sprintf(mg_system.config_error, "Possible infinite loop parsing the configuration file (%s)", mg_system.config_file);
+         mg_log_event(&(mg_system.log), mg_system.config_error, "mg_web: configuration error", 0);
+         break;
+      }
       if (*pa == '\0' || size > mg_system.config_size || mg_system.config_error[0]) {
          break;
       }
+
       wn = 0;
+      peol = strstr(pa, "\n");
+      if (peol) {
+         *peol = '\0';
+      }
+
       pz = pa;
-      while (*pz != '\x0a') {
+      word[0] = NULL;
+      while (*pz) {
          if (*pz == ' ' || *pz == '\x09') {
             *pz = '\0';
          }
          else {
             if (pz == pa || *(pz - 1) == '\0') {
-               word[wn ++] = pz;
+               if (wn < 32) {
+                  word[wn ++] = pz;
+                  word[wn] = NULL;
+               }
             }
          }
          size ++;
+         if (size > 1000) {
+            sprintf(mg_system.config_error, "Possible infinite loop parsing a line in the configuration file (%s)", mg_system.config_file);
+            mg_log_event(&(mg_system.log), mg_system.config_error, "mg_web: configuration error", 0);
+            break;
+         }
          pz ++;
       }
-      *pz = '\0';
-      pa = (pz + 1);
+      if (peol)
+         pa = (peol + 1);
+      else
+         pa = NULL;
 /*
       {
          char bufferx[1024];
@@ -1167,75 +1249,68 @@ __try {
             strcat(bufferx, word[n]);
             strcat(bufferx, ";");
          }
-         mg_log_event(&(mg_system.log), bufferx, "worker_init: config file parsed line", 0);
+         mg_log_event(&(mg_system.log), bufferx, "mg_parse_config: config file parsed line", 0);
       }
 */
-      if (wn && word[0][0] != '#') {
+      if (wn && word[0] && word[0][0] != '#') {
          if (word[0][0] == '<') {
             eos = 0;
 
-
-            for (n = 0; n < wn; ) {
-               mg_lcase(word[n]);
-               if (strstr(word[n], "/"))
-                  eos = 1;
-               if (strstr(word[n], "server")) {
-                  inserver = eos ? 0 : 1;
-                  if (!eos && (n + 1) < wn) {
-                     len = (int) strlen(word[n + 1]);
-                     if (word[n + 1][len - 1] == '>') {
-                        len --;
-                        word[n + 1][len] = '\0';
-                     }
-                     psrv = (MGSRV *) mg_malloc(NULL, sizeof(MGSRV), 0);
-                     memset((void *) psrv, 0, sizeof(MGSRV));
-                     if (psrv_prev) {
-                        psrv_prev->pnext = psrv;
-                     }
-                     else {
-                        mg_server = psrv;
-                     }
-                     psrv_prev = psrv;
-                     psrv->name = word[n + 1];
-                     psrv->name_len = (int) strlen(psrv->name);
+            mg_lcase(word[0]);
+            if (strstr(word[0], "/"))
+               eos = 1;
+            if (strstr(word[0], "server")) {
+               inserver = eos ? 0 : 1;
+               if (!eos && word[1]) {
+                  len = (int) strlen(word[1]);
+                  if (word[1][len - 1] == '>') {
+                     len --;
+                     word[1][len] = '\0';
                   }
-                  break;
-               }
-               else if (strstr(word[n], "location")) {
-                  inpath = eos ? 0 : 1;
-                  if (!eos && (n + 1) < wn) {
-                     len = (int) strlen(word[n + 1]);
-                     if (word[n + 1][len - 1] == '>') {
-                        len --;
-                        word[n + 1][len] = '\0';
-                     }
-                     if (word[n + 1][len - 1] != '/') {
-                        word[n + 1][len ++] = '/';
-                        word[n + 1][len] = '\0';
-                     }
-                     ppath = (MGPATH *) mg_malloc(NULL, sizeof(MGPATH), 0);
-                     memset((void *) ppath, 0, sizeof(MGPATH));
-                     if (ppath_prev) {
-                        ppath_prev->pnext = ppath;
-                     }
-                     else {
-                        mg_path = ppath;
-                     }
-                     ppath_prev = ppath;
-                     ppath->name = word[n + 1];
-                     ppath->name_len = (int) strlen(ppath->name);
-                     mg_lcase(ppath->name);
+                  psrv = (MGSRV *) mg_malloc(NULL, sizeof(MGSRV), 0);
+                  memset((void *) psrv, 0, sizeof(MGSRV));
+                  if (psrv_prev) {
+                     psrv_prev->pnext = psrv;
                   }
-                  break;
+                  else {
+                     mg_server = psrv;
+                  }
+                  psrv_prev = psrv;
+                  psrv->name = word[1];
+                  psrv->name_len = (int) strlen(psrv->name);
                }
-               else if (strstr(word[n], "cgi")) {
-                  incgi = eos ? 0 : 1;
-                  break;
+            }
+            else if (strstr(word[0], "location")) {
+               inpath = eos ? 0 : 1;
+               if (!eos && word[1]) {
+                  len = (int) strlen(word[1]);
+                  if (word[1][len - 1] == '>') {
+                     len --;
+                     word[1][len] = '\0';
+                  }
+                  if (word[1][len - 1] != '/') {
+                     word[1][len ++] = '/';
+                     word[1][len] = '\0';
+                  }
+                  ppath = (MGPATH *) mg_malloc(NULL, sizeof(MGPATH), 0);
+                  memset((void *) ppath, 0, sizeof(MGPATH));
+                  if (ppath_prev) {
+                     ppath_prev->pnext = ppath;
+                  }
+                  else {
+                     mg_path = ppath;
+                  }
+                  ppath_prev = ppath;
+                  ppath->name = word[1];
+                  ppath->name_len = (int) strlen(ppath->name);
+                  mg_lcase(ppath->name);
                }
-               else {
-                  sprintf(mg_system.config_error, "Configuration file syntax error on line %d", ln);
-                  break;
-               }
+            }
+            else if (strstr(word[0], "cgi")) {
+               incgi = eos ? 0 : 1;
+            }
+            else {
+               sprintf(mg_system.config_error, "Configuration file syntax error on line %d", ln);
             }
          }
          else {
@@ -1277,7 +1352,9 @@ __try {
             else if (inpath) {
                if (incgi) {
                   for (n = 0; n < wn; n ++) {
-                     ppath->cgi[ppath->cgi_max ++] = word[n];
+                     if (ppath->cgi_max < 120) {
+                        ppath->cgi[ppath->cgi_max ++] = word[n];
+                     }
                   }
                }
                if (wn > 1) {
@@ -1287,7 +1364,9 @@ __try {
                   }
                   else if (!strcmp(word[0], "servers")) {
                      for (n = 1; n < wn; n ++) {
-                        ppath->servers[ppath->srv_max ++] = word[n];
+                        if (ppath->srv_max < 30) {
+                           ppath->servers[ppath->srv_max ++] = word[n];
+                        }
                      }
                   }
                   else {
@@ -1297,7 +1376,9 @@ __try {
             }
             else if (incgi) {
                for (n = 0; n < wn; n ++) {
-                  mg_system.cgi[mg_system.cgi_max ++] = word[n];
+                  if (mg_system.cgi_max < 120) {
+                     mg_system.cgi[mg_system.cgi_max ++] = word[n];
+                  }
                }
             }
             else { /* global scope */
@@ -1305,6 +1386,9 @@ __try {
                   mg_lcase(word[0]);
                   if (!strcmp(word[0], "timeout")) {
                      mg_system.timeout = (int) strtol(word[1], NULL, 10);
+                     if (!mg_system.timeout) {
+                        mg_system.timeout = NETX_TIMEOUT;
+                     }
                   }
                   else {
                      sprintf(mg_system.config_error, "Invalid 'global' parameter '%s' on line %d", word[0], ln); 
@@ -1334,6 +1418,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(bufferx, 255, "Exception caught in f:mg_parse_config: %x", code);
+      strcpy(mg_system.config_error, bufferx);
       mg_log_event(&(mg_system.log), bufferx, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
@@ -1349,6 +1434,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 int mg_verify_config()
 {
    int n;
+   char *pbuf;
    MGSRV *psrv;
    MGPATH *ppath;
 
@@ -1356,6 +1442,8 @@ int mg_verify_config()
 __try {
 #endif
 
+   pbuf = (char *) mg_malloc(NULL, 8192, 0);
+   
    psrv = mg_server;
    if (!psrv) {
       strcpy(mg_system.config_error, "No Server configurations found");
@@ -1366,6 +1454,11 @@ __try {
    if (!ppath) {
       strcpy(mg_system.config_error, "No Location configurations found");
       goto mg_verify_config_exit;
+   }
+
+   if (pbuf) {
+      sprintf(pbuf, "response timeout=%d; CGI Variables requested=%d;", mg_system.timeout, mg_system.cgi_max);
+      mg_log_event(&(mg_system.log), pbuf, "mg_web: configuration: global section", 0);
    }
 
    while (psrv) {
@@ -1411,13 +1504,12 @@ __try {
             break;
          }
       }
-/*
-      {
-         char bufferx[2048];
-         sprintf(bufferx, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null");
-         mg_log_event(&(mg_system.log), bufferx, "mg_web: configuration: server", 0);
+
+      if (pbuf) {
+         sprintf(pbuf, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null");
+         mg_log_event(&(mg_system.log), pbuf, "mg_web: configuration: server", 0);
       }
-*/
+
       psrv = psrv->pnext;
    }
 
@@ -1456,13 +1548,12 @@ __try {
          sprintf(mg_system.config_error, "No Servers found for Location '%s'", ppath->name);
          break;
       }
-/*
-      {
-         char bufferx[2048];
-         sprintf(bufferx, "location name=%s; function=%s; server1=%s; server2=%s;", ppath->name, ppath->function ? ppath->function : "null", ppath->servers[0] ? ppath->servers[0] : "null", ppath->servers[1] ? ppath->servers[1] : "null" );
-         mg_log_event(&(mg_system.log), bufferx, "mg_web: configuration: location", 0);
+
+      if (pbuf) {
+         sprintf(pbuf, "location name=%s; function=%s; server1=%s; server2=%s;", ppath->name, ppath->function ? ppath->function : "null", ppath->servers[0] ? ppath->servers[0] : "null", ppath->servers[1] ? ppath->servers[1] : "null" );
+         mg_log_event(&(mg_system.log), pbuf, "mg_web: configuration: location", 0);
       }
-*/
+
       ppath = ppath->pnext;
    }
 
@@ -1470,6 +1561,10 @@ mg_verify_config_exit:
 
    if (mg_system.config_error[0]) {
       mg_log_event(&(mg_system.log), mg_system.config_error, "mg_web: configuration error", 0);
+   }
+
+   if (pbuf) {
+      mg_free(NULL, pbuf, 0);
    }
 
    return 0;
@@ -1484,6 +1579,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(bufferx, 255, "Exception caught in f:mg_verify_config: %x", code);
+      strcpy(mg_system.config_error, bufferx);
       mg_log_event(&(mg_system.log), bufferx, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
