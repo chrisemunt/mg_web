@@ -299,7 +299,7 @@ __except (EXCEPTION_EXECUTE_HANDLER ) {
    __try {
       code = GetExceptionCode();
       sprintf(buffer, "Exception caught in f:mg_handler: %x", code);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, pweb, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -887,7 +887,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_get_server_variable: %x", code);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, pweb, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -1043,7 +1043,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_read_client: %x", code);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, pweb, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -1066,7 +1066,7 @@ __try {
 
    pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
 /*
-   mg_log_buffer(pweb->plog, pbuffer, buffer_size, "mgweb: response", 0);
+   mg_log_buffer(pweb->plog, pweb, pbuffer, buffer_size, "mgweb: response", 0);
 */
    if (!pwebapache->write_bucket_brigade) {
       pwebapache->write_bucket_brigade = apr_brigade_create(pwebapache->r->pool, pwebapache->r->connection->bucket_alloc);
@@ -1089,7 +1089,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_write_client: %x", code);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, pweb, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -1121,7 +1121,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_suppress_headers: %x", code);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, pweb, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -1147,7 +1147,7 @@ __try {
 
    cookie_no = 0;
 /*
-   mg_log_buffer(pweb->plog, pweb->response_headers, (int) strlen(pweb->response_headers), "mgweb: headers", 0);
+   mg_log_buffer(pweb->plog, pweb, pweb->response_headers, (int) strlen(pweb->response_headers), "mgweb: headers", 0);
 */
    pa = pweb->response_headers;
 
@@ -1229,7 +1229,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_submit_headers: %x", code);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, pweb, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
