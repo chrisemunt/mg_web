@@ -352,7 +352,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_get_server_variable: %x:%d", code, phase);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -394,7 +394,7 @@ __try {
       {
          char buffer[256];
          sprintf_s(buffer, 255, "hr=%d; buffer_size=%d; bytes_received=%d; total=%d; FAILED(hr)=%d;", hr, buffer_size, bytes_received, total, FAILED(hr));
-         mg_log_event(pweb->plog, buffer, "mg_client_read", 0);
+         mg_log_event(pweb->plog, pweb, buffer, "mg_client_read", 0);
       }
 */
       if (bytes_received > 0) {
@@ -449,7 +449,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_read_client: %x:%d", code, phase);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -507,7 +507,7 @@ __try {
       {
          char buffer[256];
          sprintf_s(buffer, 255, "hr=%d; buffer_size=%d; max=%d; cbSent=%d; FAILED(hr)=%d; SUCCEEDED(hr)=%d", hr, buffer_size, max, sent, FAILED(hr), SUCCEEDED(hr));
-         mg_log_event(pweb->plog, buffer, "mg_client_write", 0);
+         mg_log_event(pweb->plog, pweb, buffer, "mg_client_write", 0);
       }
 */
       total += max;
@@ -545,7 +545,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_write_client: %x:%d", code, phase);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -581,7 +581,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_suppress_headers: %x:%d", code, phase);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -678,7 +678,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_submit_headers: %x:%d", code, phase);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
