@@ -376,7 +376,7 @@ static void mg_payload_handler(ngx_http_request_t *r)
       {
          char bufferx[256];
          sprintf(bufferx, "request_clen=%d;", pweb->request_clen);
-         mg_log_event(&(mg_system.log), bufferx, "mg_payload_handler: temp_file", 0);
+         mg_log_event(&(mg_system.log), NULL, bufferx, "mg_payload_handler: temp_file", 0);
       }
 */
       while ((len = ngx_read_file(&r->request_body->temp_file->file, (u_char *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used), 4096, total)) > 0) {
@@ -389,7 +389,7 @@ static void mg_payload_handler(ngx_http_request_t *r)
       {
          char bufferx[256];
          sprintf(bufferx, "request_clen=%d;", pweb->request_clen);
-         mg_log_event(&(mg_system.log), bufferx, "mg_payload_handler: memory_chain", 0);
+         mg_log_event(&(mg_system.log), NULL, bufferx, "mg_payload_handler: memory_chain", 0);
       }
 */
       while (cl) {
@@ -441,7 +441,7 @@ static void mg_payload_handler(ngx_http_request_t *r)
       {
          char bufferx[256];
          sprintf(bufferx, "Thread Pool: task=%p; pwebnginx=%p r=%p;", task, pwebnginx, r);
-         mg_log_event(&(mg_system.log), bufferx, "Thread Pool", 0);
+         mg_log_event(&(mg_system.log), NULL, bufferx, "Thread Pool", 0);
       }
 */
 
@@ -580,7 +580,7 @@ static void mg_execute_pool(void *data, ngx_log_t *log)
    {
       char bufferx[256];
       sprintf(bufferx, "mg_execute_pool: pwebnginx=%p; r=%p;", pwebnginx, pwebnginx->r);
-      mg_log_event(&(mg_system.log), "mg_execute_pool", bufferx, 0);
+      mg_log_event(&(mg_system.log), NULL, "mg_execute_pool", bufferx, 0);
    }
 */
 
@@ -600,7 +600,7 @@ static void mg_execute_pool_completion(ngx_event_t *ev)
    {
       char bufferx[256];
       sprintf(bufferx, "mg_execute_pool_completion: r=%p;", r);
-      mg_log_event(&(mg_system.log), "mg_execute_pool_completion", bufferx, 0);
+      mg_log_event(&(mg_system.log), NULL, "mg_execute_pool_completion", bufferx, 0);
    }
 */
 
@@ -625,7 +625,7 @@ static char * mg_param_mgweb(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
    ngx_http_core_loc_conf_t  *clcf;
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_param_mgweb()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_param_mgweb()", "mg_web: trace", 0);
 #endif
 
    value = cf->args->elts;
@@ -658,7 +658,7 @@ static char * mg_param_mgwebfiletypes(ngx_conf_t *cf, ngx_command_t *cmd, void *
    ngx_http_core_loc_conf_t  *clcf;
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_param_mgwebfiletypes()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_param_mgwebfiletypes()", "mg_web: trace", 0);
 #endif
 
    value = cf->args->elts;
@@ -699,7 +699,7 @@ static char * mg_param_mgwebconfigfile(ngx_conf_t *cf, ngx_command_t *cmd, void 
    ngx_http_core_loc_conf_t  *clcf;
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_param_mgwebconfigfile()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_param_mgwebconfigfile()", "mg_web: trace", 0);
 #endif
 
    value = cf->args->elts;
@@ -726,7 +726,7 @@ static char * mg_param_mgweblogfile(ngx_conf_t *cf, ngx_command_t *cmd, void *co
    ngx_http_core_loc_conf_t  *clcf;
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_param_mgweblogfile()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_param_mgweblogfile()", "mg_web: trace", 0);
 #endif
 
    value = cf->args->elts;
@@ -758,7 +758,7 @@ static char * mg_param_mgwebthreadpool(ngx_conf_t *cf, ngx_command_t *cmd, void 
 #endif
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_param_mgweblogfile()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_param_mgweblogfile()", "mg_web: trace", 0);
 #endif
 
    value = cf->args->elts;
@@ -793,7 +793,7 @@ static char * mg_param_mgwebthreadpool(ngx_conf_t *cf, ngx_command_t *cmd, void 
 static ngx_int_t mg_pre_conf(ngx_conf_t *cf)
 {
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_pre_conf()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_pre_conf()", "mg_web: trace", 0);
 #endif
 
    return NGX_OK;
@@ -806,7 +806,7 @@ static ngx_int_t mg_post_conf(ngx_conf_t *cf)
    ngx_http_core_main_conf_t *cmcf;
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_post_conf()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_post_conf()", "mg_web: trace", 0);
 #endif
 
    cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
@@ -827,7 +827,7 @@ static void * mg_create_main_conf(ngx_conf_t *cf)
    mg_conf_main *conf;
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_create_main_conf()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_create_main_conf()", "mg_web: trace", 0);
 #endif
 
    conf = ngx_pcalloc(cf->pool, sizeof(mg_conf_main));
@@ -843,7 +843,7 @@ static void * mg_create_main_conf(ngx_conf_t *cf)
    {
       char bufferx[256];
       sprintf(bufferx, "mg_create_main_conf: conf=%p", conf);
-      mg_log_event(&debug_log, conf->mg_thread_pool, bufferx, 0);
+      mg_log_event(&debug_log, NULL, conf->mg_thread_pool, bufferx, 0);
    }
 #endif
 
@@ -854,7 +854,7 @@ static void * mg_create_main_conf(ngx_conf_t *cf)
 char * mg_init_main_conf(ngx_conf_t *cf, void *conf)
 {
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_init_main_conf()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_init_main_conf()", "mg_web: trace", 0);
 #endif
 
    return NGX_CONF_OK;
@@ -866,7 +866,7 @@ static void * mg_create_server_conf(ngx_conf_t *cf)
    mg_conf_server *conf;
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_create_server_conf()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_create_server_conf()", "mg_web: trace", 0);
 #endif
 
    conf = ngx_pcalloc(cf->pool, sizeof(mg_conf_server));
@@ -882,7 +882,7 @@ static void * mg_create_server_conf(ngx_conf_t *cf)
    {
       char bufferx[256];
       sprintf(bufferx, "mg_create_server_conf: conf=%p", conf);
-      mg_log_event(&debug_log, conf->mg_thread_pool, bufferx, 0);
+      mg_log_event(&debug_log, NULL, conf->mg_thread_pool, bufferx, 0);
    }
 #endif
 
@@ -906,7 +906,7 @@ static void * mg_create_location_conf(ngx_conf_t *cf)
    mg_conf_location *conf;
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_create_location_conf()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_create_location_conf()", "mg_web: trace", 0);
 #endif
 
    conf = ngx_pcalloc(cf->pool, sizeof(mg_conf_location));
@@ -923,7 +923,7 @@ static void * mg_create_location_conf(ngx_conf_t *cf)
    {
       char bufferx[256];
       sprintf(bufferx, "mg_create_location_conf: conf=%p", conf);
-      mg_log_event(&debug_log, conf->mg_thread_pool, bufferx, 0);
+      mg_log_event(&debug_log, NULL, conf->mg_thread_pool, bufferx, 0);
    }
 #endif
 
@@ -934,7 +934,7 @@ static void * mg_create_location_conf(ngx_conf_t *cf)
 static char * mg_merge_location_conf(ngx_conf_t *cf, void *parent, void *child)
 {
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_merge_location_conf()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_merge_location_conf()", "mg_web: trace", 0);
 #endif
 
     return NGX_CONF_OK;
@@ -945,7 +945,7 @@ ngx_int_t mg_master_init(ngx_log_t *log)
 {
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_master_init()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_master_init()", "mg_web: trace", 0);
 #endif
 
    return NGX_OK;
@@ -955,7 +955,7 @@ ngx_int_t mg_master_init(ngx_log_t *log)
 void mg_master_exit(ngx_cycle_t *cycle)
 {
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_master_exit()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_master_exit()", "mg_web: trace", 0);
 #endif
 
    return;
@@ -967,7 +967,7 @@ ngx_int_t mg_module_init(ngx_cycle_t *cycle)
    mg_conf_main  *pmain;
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_module_init()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_module_init()", "mg_web: trace", 0);
 #endif
 
    pmain = (mg_conf_main *) ngx_http_cycle_get_module_main_conf(cycle, ngx_http_mg_web);
@@ -985,9 +985,9 @@ ngx_int_t mg_process_init(ngx_cycle_t *cycle)
 {
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_process_init()", "mg_web: trace", 0);
-   mg_log_event(&debug_log, mg_system.config_file, "mg_web: trace: mg_module_init(): config file", 0);
-   mg_log_event(&debug_log, mg_system.log.log_file, "mg_web: trace: mg_module_init(): log file", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_process_init()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, mg_system.config_file, "mg_web: trace: mg_module_init(): config file", 0);
+   mg_log_event(&debug_log, NULL, mg_system.log.log_file, "mg_web: trace: mg_module_init(): log file", 0);
 #endif
 
    mg_worker_init();
@@ -1002,7 +1002,7 @@ ngx_int_t mg_process_init(ngx_cycle_t *cycle)
 void mg_process_exit(ngx_cycle_t *cycle)
 {
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_process_exit()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_process_exit()", "mg_web: trace", 0);
 #endif
 
    mg_worker_exit();
@@ -1015,7 +1015,7 @@ ngx_int_t mg_thread_init(ngx_cycle_t *cycle)
 {
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_process_init()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_process_init()", "mg_web: trace", 0);
 #endif
 
    return NGX_OK;
@@ -1025,7 +1025,7 @@ ngx_int_t mg_thread_init(ngx_cycle_t *cycle)
 void mg_thread_exit(ngx_cycle_t *cycle)
 {
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, "mg_web: mg_thread_exit()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_thread_exit()", "mg_web: trace", 0);
 #endif
 
    return;
@@ -1214,7 +1214,7 @@ __try {
                {
                   char bufferx[1024];
                   sprintf(bufferx, "name=%s (%d); value=%s (%d)", hd[tn].key.data, (int) hd[tn].key.len, hd[tn].value.data, (int) hd[tn].value.len);
-                  mg_log_event(mg_system.plog, bufferx, "cgi list", 0);
+                  mg_log_event(mg_system.plog, NULL, bufferx, "cgi list", 0);
                }
 */
                if (hd[tn].key.len > 60) {
@@ -1296,7 +1296,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(bufferx, 255, "Exception caught in f:mg_get_server_variable: %x", code);
-      mg_log_event(pweb->plog, bufferx, "Error Condition", 0);
+      mg_log_event(pweb->plog, NULL, bufferx, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -1331,7 +1331,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_read_client: %x", code);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -1353,7 +1353,7 @@ int mg_client_write(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
 __try {
 #endif
 /*
-   mg_log_buffer(pweb->plog, (char *) pbuffer, buffer_size, "Add buffer to chain", 0);
+   mg_log_buffer(pweb->plog, pweb, (char *) pbuffer, buffer_size, "Add buffer to chain", 0);
 */
    pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
 
@@ -1402,7 +1402,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_write_client: %x", code);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -1433,7 +1433,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_suppress_headers: %x", code);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
@@ -1490,7 +1490,7 @@ __try {
                {
                   char buffer[256];
                   sprintf(buffer, "header %s=%s;", (char *) vname, (char *) hd[tn].value.data);
-                  mg_log_event(pweb->plog, buffer, "mgweb: headers: current list", 0);
+                  mg_log_event(pweb->plog, NULL, buffer, "mgweb: headers: current list", 0);
                }
 
             }
@@ -1571,7 +1571,7 @@ __try {
    {
       char buffer[256];
       sprintf(buffer, "rc=%d; clen=%d; status=%d;", n, pweb->response_clen, (int) pwebnginx->r->headers_out.status);
-      mg_log_event(pweb->plog, buffer, "mgweb: headers result", 0);
+      mg_log_event(pweb->plog, NULL, buffer, "mgweb: headers result", 0);
    }
 */
 
@@ -1587,7 +1587,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_submit_headers: %x", code);
-      mg_log_event(pweb->plog, buffer, "Error Condition", 0);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
