@@ -43,12 +43,13 @@ a0 d vers q
  ; v3.3.8:   25 May       2020 (Add protocol upgrade for mg-dbx - TCP based connectivity from Node.js)
  ; v3.3.9:   17 June      2020 (Add web protocol for mg_web. Support for nested ISC Object References)
  ; v3.3.10:   7 July      2020 (Improve web protocol for mg_web)
+ ; v3.3.11:   3 August    2020 (Fix the stop^%zmgsi() facility. Fix a UNIX connectivity issue)
  ;
 v() ; version and date
  n v,r,d
  s v="3.3"
- s r=10
- s d="7 July 2020"
+ s r=11
+ s d="3 August 2020"
  q v_"."_r_"."_d
  ;
 vers ; version information
