@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Export generator="Cache" version="26" zv="Cache for Windows (x86-64) 2019.1 (Build 192) Sun Nov 18 2018 23:37:14 EST" ts="2020-07-23 09:00:00">
-<Routine name="%zmgsi" type="INT" languagemode="0" timestamp="65583,59417"><![CDATA[
+<Export generator="Cache" version="26" zv="Cache for Windows (x86-64) 2019.1 (Build 192) Sun Nov 18 2018 23:37:14 EST" ts="2020-08-03 09:00:00">
+<Routine name="%zmgsi" type="INT" languagemode="0" timestamp="65594,43626"><![CDATA[
 %zmgsi ;(CM) Service Integration - Core Server
  ;
  ;  ----------------------------------------------------------------------------
- ;  | %zmgsi                                                                    |
+ ;  | %zmgsi                                                                   |
  ;  | Author: Chris Munt cmunt@mgateway.com, chris.e.munt@gmail.com            |
  ;  | Copyright (c) 2016-2020 M/Gateway Developments Ltd,                      |
  ;  | Surrey UK.                                                               |
@@ -47,10 +47,16 @@ eeestart ; start
  q
  ;
 stop(port) ; stop
- w !,"stopping mgsi ... "
- s pport=+$g(port)
+ w !,"Terminating the %zmgsi service ... "
+ s pport=+$g(port) i pport="" q
+ i 'pport s pport=7041
+ ; +not_ydb
+ s job=$g(^%zmgsi("server",pport)) i job'="" d $SYSTEM.Process.Terminate(job) g stopx
+ ; -not_ydb
  d stop1(pport,1)
- w !!,"mgsi stopped",!
+stopx ; service should have terminated
+ k ^%zmgsi("server",pport)
+ w !!,"%zmgsi service terminated",!
  q
  ;
 stop1(port,context) ; stop daemon
@@ -87,6 +93,7 @@ accept(port) ; concurrent tcp service (cache, m21, msm)
  d seterror^%zmgsis("")
  s port=+$g(port)
  i 'port s port=7041
+ s ^%zmgsi("server",port)=$j
  i $$isidb^%zmgsis() s dev="|TCP|"_port
  i $$ism21^%zmgsis() s dev=9050
  i $$ismsm^%zmgsis() d
@@ -329,7 +336,7 @@ ylink ; link all routines
 ]]></Routine>
 
 
-<Routine name="%zmgsis" type="INT" languagemode="0" timestamp="65583,59417"><![CDATA[
+<Routine name="%zmgsis" type="INT" languagemode="0" timestamp="65594,43626"><![CDATA[
 %zmgsis ;(CM) Service Integration - Child Process
  ;
  ;  ----------------------------------------------------------------------------
@@ -375,12 +382,13 @@ a0 d vers q
  ; v3.3.8:   25 May       2020 (Add protocol upgrade for mg-dbx - TCP based connectivity from Node.js)
  ; v3.3.9:   17 June      2020 (Add web protocol for mg_web. Support for nested ISC Object References)
  ; v3.3.10:   7 July      2020 (Improve web protocol for mg_web)
+ ; v3.3.11:   3 August    2020 (Fix the stop^%zmgsi() facility. Fix a UNIX connectivity issue)
  ;
 v() ; version and date
  n v,r,d
  s v="3.3"
- s r=10
- s d="7 July 2020"
+ s r=11
+ s d="3 August 2020"
  q v_"."_r_"."_d
  ;
 vers ; version information
@@ -2008,7 +2016,7 @@ dbx(ctx,cmnd,data,len,param) ; entry point from fixed binding
  n %r,obufsize,idx,offset,rc,sort,res,ze,oref,type
  s $zt="dbxe^%zmgsis" ; new $ztrap set $ztrap="zgoto "_$zlevel_":dbxe^%zmgsis"
  ; +not_ydb
- s %io=$io u "//./nul:"_$j
+ ;;; s %io=$io u "//./nul:"_$j
  ; -not_ydb
  s obufsize=$$dsize256($e(data,1,4))
  s idx=$$dsize256($e(data,6,9))
@@ -2028,7 +2036,7 @@ dbx(ctx,cmnd,data,len,param) ; entry point from fixed binding
  ;s res=res
  s res=$$esize256($l(res))_$c((sort*20)+type)_res
  ; +not_ydb
- u %io
+ ;;; u %io
  ; -not_ydb
  q res
 dbxe ; Error
