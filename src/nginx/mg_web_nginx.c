@@ -327,6 +327,7 @@ static ngx_int_t mg_handler(ngx_http_request_t *r)
    pwebnginx->pweb = pweb;
    pweb->pweb_server = (void *) pwebnginx;
    pweb->evented = 1;
+   pweb->wserver_chunks_response = 1;
 
    rc = mg_web((MGWEB *) pweb);
 
@@ -384,7 +385,7 @@ static void mg_payload_handler(ngx_http_request_t *r)
          pweb->input_buf.len_used += len;
       }
    }
-   else {
+   else {  
 /*
       {
          char bufferx[256];
@@ -1347,6 +1348,7 @@ int mg_client_write(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
 {
    ngx_chain_t *c;
    ngx_buf_t *b;
+   u_char *bx;
    MGWEBNGINX *pwebnginx;
 
 #ifdef _WIN32
@@ -1359,20 +1361,29 @@ __try {
 
    c = ngx_pcalloc(pwebnginx->r->pool, sizeof(ngx_chain_t));
    if (c == NULL) {
-      ngx_log_error(NGX_LOG_ERR, pwebnginx->r->connection->log, 0, "Failed to allocate response buffer.");
+      ngx_log_error(NGX_LOG_ERR, pwebnginx->r->connection->log, 0, "Failed to allocate response buffer (ngx_chain_t).");
       ngx_http_finalize_request(pwebnginx->r, NGX_HTTP_INTERNAL_SERVER_ERROR);
       return -1;
    }
 
    b = ngx_pcalloc(pwebnginx->r->pool, sizeof(ngx_buf_t));
    if (b == NULL) {
-      ngx_log_error(NGX_LOG_ERR, pwebnginx->r->connection->log, 0, "Failed to allocate response buffer.");
+      ngx_log_error(NGX_LOG_ERR, pwebnginx->r->connection->log, 0, "Failed to allocate response buffer (ngx_buf_t).");
       ngx_http_finalize_request(pwebnginx->r, NGX_HTTP_INTERNAL_SERVER_ERROR);
       return -1;
    }
 
-   b->pos = (u_char *) pbuffer; /* first position in memory of the data */
-   b->last = (u_char *) (pbuffer + buffer_size); /* last position */
+   bx = ngx_pcalloc(pwebnginx->r->pool, buffer_size + 32);
+   if (bx == NULL) {
+      ngx_log_error(NGX_LOG_ERR, pwebnginx->r->connection->log, 0, "Failed to allocate response buffer (u_char).");
+      ngx_http_finalize_request(pwebnginx->r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+      return -1;
+   }
+
+   memcpy((void *) bx, (void *) pbuffer, buffer_size);
+
+   b->pos = (u_char *) bx; /* first position in memory of the data */
+   b->last = (u_char *) (bx + buffer_size); /* last position */
 
    b->memory = 1; /* content is in read-only memory */
    /* (i.e., filters should copy it rather than rewrite in place) */
