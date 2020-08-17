@@ -3,10 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-3 August 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+17 August 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 1.0; Revision 3.
-* This is the first release and very much 'a work in progress'.  Proceed with care!
+* Current Release: Version: 1.1; Revision 4.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -76,8 +75,7 @@ Full documentation for building, deploying and using **mg\_web** will be found i
 
 ## Things for the future...
 
-* The ability to handle request and response payloads that exceed the maximum DB Server string size.
-* The ability to stream response data using DB Server 'Write' commands.
+* The ability to handle request payloads that exceed the maximum DB Server string size.
 * The ability to specify more than one DB Server per web path for the purpose of fail-over in the event of the primary DB Server becoming unavailable.
 
 ## License
@@ -111,3 +109,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Correct a fault in the network connectivity code between **mg\_web** and InterSystems databases under UNIX.
 * Correct a fault in the API-based connectivity code between **mg\_web** and YottaDB under UNIX.
 * Introduce an Event Log facility that can be controlled by the **log\_level** configuration parameter.  See the documentation (section: 'General **mg\_web** configuration').
+
+### v1.1.4 (17 August 2020)
+
+* Introduce the ability to stream response content back to the client using M Write statements (InterSystems Databases) or by using the supplied write^%zmgsis() procedure (YottaDB and InterSystems Databases).
+* Include the configuration path and server names used for the request in the DB Server function's %system array.
+
