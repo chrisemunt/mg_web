@@ -258,7 +258,8 @@ typedef int    xc_status_t;
 
 /* End of GT.M call-in interface */
 
-#define DBX_CGI_BASE             "REQUEST_METHOD\nSCRIPT_NAME\nQUERY_STRING\n\n"
+#define MG_DEFAULT_CONFIG        "timeout 30\n<server local>\ntype IRIS\nhost localhost\ntcp_port 7041\nusername _SYSTEM\npassword SYS\nnamespace USER\n</server>\n<location />\nfunction mgweb^%zmgsis\nservers local\n</location>\n"
+#define DBX_CGI_BASE             "REQUEST_METHOD\nSCRIPT_NAME\nQUERY_STRING\nSERVER_PROTOCOL\n\n"
 #define DBX_CGI_REQUEST_METHOD   0
 #define DBX_CGI_SCRIPT_NAME      1
 #define DBX_CGI_QUERY_STRING     2
@@ -331,8 +332,12 @@ typedef int    xc_status_t;
 #else
 #define DBX_CACHE_SO             "libcache.so"
 #define DBX_CACHE_DYLIB          "libcache.dylib"
+#define DBX_ISCCACHE_SO          "libisccache.so"
+#define DBX_ISCCACHE_DYLIB       "libisccache.dylib"
 #define DBX_IRIS_SO              "libirisdb.so"
 #define DBX_IRIS_DYLIB           "libirisdb.dylib"
+#define DBX_ISCIRIS_SO           "libiscirisdb.so"
+#define DBX_ISCIRIS_DYLIB        "libiscirisdb.dylib"
 #define DBX_YDB_SO               "libyottadb.so"
 #define DBX_YDB_DYLIB            "libyottadb.dylib"
 #define DBX_GTM_SO               "libgtmshr.so"
@@ -355,10 +360,58 @@ typedef int    xc_status_t;
       RC = mg_mutex_unlock(pcon->p_db_mutex); \
    } \
 
+#define MG_LOG_REQUEST_FRAME(PWEB, HEAD, SIZE) \
+   if (PWEB->plog->log_frames) { \
+      char bufferx[256]; \
+      sprintf(bufferx, "Request to DB Server: 0x%02x%02x%02x%02x (%lu Bytes)", (unsigned char) HEAD[3], (unsigned char) HEAD[2], (unsigned char) HEAD[1], (unsigned char) HEAD[0], (unsigned long) SIZE); \
+      mg_log_event(PWEB->plog, PWEB, bufferx, "mg_web: Send request", 0); \
+   } \
+
+#define MG_LOG_RESPONSE_FRAME(PWEB, HEAD, SIZE) \
+   if (PWEB->plog->log_frames) { \
+      char bufferx[256]; \
+      if (SIZE > 0) \
+         sprintf(bufferx, "%sResponse from DB Server: 0x%02x%02x%02x%02x (%lu Bytes; sort=%d; type=%d)", PWEB->response_streamed ? "Chunked " : "", (unsigned char) HEAD[3], (unsigned char) HEAD[2], (unsigned char) HEAD[1], (unsigned char) HEAD[0], (unsigned long) SIZE, pweb->output_val.sort, pweb->output_val.type); \
+      else \
+         sprintf(bufferx, "%sResponse from DB Server: 0x%02x%02x%02x%02x (EOF)", PWEB->response_streamed ? "Chunked " : "", (unsigned char) HEAD[3], (unsigned char) HEAD[2], (unsigned char) HEAD[1], (unsigned char) HEAD[0]); \
+      mg_log_event(PWEB->plog, PWEB, bufferx, "mg_web: Read response", 0); \
+   } \
+
+#define MG_LOG_REQUEST_BUFFER(PWEB, BUFFER, SIZE) \
+   if (PWEB->plog->log_transmissions) { \
+      char bufferx[256]; \
+      sprintf(bufferx, "mg_web: Request to DB Server: (%lu Bytes)", (unsigned long) SIZE); \
+      mg_log_buffer(pweb->plog, pweb, (char *) BUFFER, (int) SIZE, bufferx, 0); \
+   } \
+
+#define MG_LOG_RESPONSE_BUFFER(PWEB, HEAD, BUFFER, SIZE) \
+   if (PWEB->plog->log_transmissions) { \
+      char bufferx[256]; \
+      if (SIZE > 0) \
+         sprintf(bufferx, "mg_web: %sResponse from DB Server: 0x%02x%02x%02x%02x (%lu Bytes; sort=%d; type=%d)", PWEB->response_streamed ? "Chunked " : "", (unsigned char) HEAD[3], (unsigned char) HEAD[2], (unsigned char) HEAD[1], (unsigned char) HEAD[0], (unsigned long) SIZE, pweb->output_val.sort, pweb->output_val.type); \
+      else \
+         sprintf(bufferx, "mg_web: %sResponse from DB Server: 0x%02x%02x%02x%02x (EOF)", PWEB->response_streamed ? "Chunked " : "", (unsigned char) HEAD[3], (unsigned char) HEAD[2], (unsigned char) HEAD[1], (unsigned char) HEAD[0]); \
+      mg_log_buffer(PWEB->plog, PWEB, BUFFER, SIZE, bufferx, 0); \
+   } \
+
+#define MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(PWEB, BUFFER, SIZE) \
+   if (PWEB->plog->log_transmissions_to_webserver) { \
+      char bufferx[256]; \
+      sprintf(bufferx, "mg_web: Response to Web Server: (%lu Bytes)", (unsigned long) SIZE); \
+      mg_log_buffer(pweb->plog, pweb, (char *) BUFFER, (int) SIZE, bufferx, 0); \
+   } \
+
+#define MG_LOG_RESPONSE_HEADER(PWEB) \
+   if (PWEB->plog->log_frames || PWEB->plog->log_transmissions || PWEB->plog->log_transmissions_to_webserver) { \
+      char bufferx[256]; \
+      sprintf(bufferx, "mg_web: Response HTTP Header: (%d Bytes)", PWEB->response_headers_len); \
+      mg_log_buffer(pweb->plog, pweb, (char *) PWEB->response_headers, (int) PWEB->response_headers_len, bufferx, 0); \
+   } \
+
 
 #define NETX_TIMEOUT             30
 #define NETX_IPV6                1
-#define NETX_READ_EOF            0
+#define NETX_READ_EOF            -9
 #define NETX_READ_NOCON          -1
 #define NETX_READ_ERROR          -2
 #define NETX_READ_TIMEOUT        -3
@@ -740,8 +793,9 @@ typedef struct tagDBXLOG {
    char log_level[8];
    char log_filter[64];
    short log_errors;
-   short log_functions;
+   short log_frames;
    short log_transmissions;
+   short log_transmissions_to_webserver;
    unsigned long req_no;
    unsigned long fun_no;
    char product[4];
@@ -1012,6 +1066,7 @@ typedef struct tagMGSYS {
    int            config_size;
    int            cgi_max;
    int            timeout;
+   unsigned long  requestno;
    char           module_file[256];
    char           config_file[256];
    char           config_error[512];
@@ -1026,6 +1081,7 @@ typedef struct tagMGSYS {
 typedef struct tagMGWEB {
    int            connection_no;
    int            evented;
+   int            wserver_chunks_response;
    int            request_clen;
    char           *script_name;
    int            script_name_len;
@@ -1034,6 +1090,7 @@ typedef struct tagMGWEB {
    int            request_method_len;
    char           *query_string;
    int            query_string_len;
+   int            response_streamed;
    int            response_clen;
    int            response_size;
    int            response_remaining;
@@ -1041,6 +1098,10 @@ typedef struct tagMGWEB {
    char           *response_content;
    char           *response_headers;
    int            response_headers_len;
+   unsigned long  requestno_in;
+   unsigned long  requestno_out;
+   char           *requestno;
+   unsigned char  db_chunk_head[8];
    DBXLOG         *plog;
    DBXSTR         input_buf;
    DBXVAL         output_val;
@@ -1092,7 +1153,7 @@ int                     mg_get_path_configuration     (MGWEB *pweb);
 int                     mg_add_cgi_variable           (MGWEB *pweb, char *name, int name_len, char *value, int value_len);
 DBXCON *                mg_obtain_connection          (MGWEB *pweb, MGSRV *psrv, MGPATH *ppath);
 int                     mg_connect                    (MGWEB *pweb, DBXCON *pcon, int context);
-int                     mg_release_connection         (MGWEB *pweb, DBXCON *pcon, int context);
+int                     mg_release_connection         (MGWEB *pweb, DBXCON *pcon, int close_connection);
 MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen);
 int                     mg_release_request_memory     (MGWEB *pweb);
 int                     mg_worker_init                ();
@@ -1162,6 +1223,7 @@ int                     netx_load_winsock             (DBXCON *pcon, int context
 int                     netx_tcp_connect              (DBXCON *pcon, int context);
 int                     netx_tcp_handshake            (DBXCON *pcon, int context);
 int                     netx_tcp_command              (DBXCON *pcon, MGWEB *pweb, int command, int context);
+int                     netx_tcp_read_stream          (DBXCON *pcon, MGWEB *pweb);
 int                     netx_tcp_connect_ex           (DBXCON *pcon, xLPSOCKADDR p_srv_addr, socklen_netx srv_addr_len, int timeout);
 int                     netx_tcp_disconnect           (DBXCON *pcon, int context);
 int                     netx_tcp_write                (DBXCON *pcon, unsigned char *data, int size);
