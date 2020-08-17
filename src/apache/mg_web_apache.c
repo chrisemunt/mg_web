@@ -277,6 +277,7 @@ __try {
 
    pweb->pweb_server = (void *) pwebapache;
    pweb->evented = 0;
+   pweb->wserver_chunks_response = 0;
 
    retval = mg_web((MGWEB *) pweb);
 
