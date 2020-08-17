@@ -115,6 +115,7 @@ public:
 
       pweb->pweb_server = (void *) pwebiis;
       pweb->evented = 0;
+      pweb->wserver_chunks_response = 0;
 
       /* Test for an error. */
       if (pHttpResponse != NULL) {
