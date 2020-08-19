@@ -275,9 +275,23 @@ __try {
       return HTTP_INTERNAL_SERVER_ERROR;
    }
 
+   pweb->http_version_major = r->proto_num / 1000;
+   pweb->http_version_minor = r->proto_num % 1000;
+
+/*
+   {
+      char bufferx[256];
+      sprintf(bufferx, "HTTP raw version: proto_num=%d; protocol=%s; version=%d.%d;", r->proto_num, r->protocol, pweb->http_version_major, pweb->http_version_minor);
+      mg_log_event(&(mg_system.log), NULL, bufferx, "mg_web: information", 0);
+   }
+*/
+
    pweb->pweb_server = (void *) pwebapache;
    pweb->evented = 0;
    pweb->wserver_chunks_response = 0;
+   if (pweb->http_version_major == 2) {
+      pweb->wserver_chunks_response = 1;
+   }
 
    retval = mg_web((MGWEB *) pweb);
 
