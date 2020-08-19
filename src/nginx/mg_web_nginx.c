@@ -324,6 +324,15 @@ static ngx_int_t mg_handler(ngx_http_request_t *r)
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
    }
 
+   pweb->http_version_major = r->http_version / 1000;
+   pweb->http_version_minor = r->http_version % 1000;
+/*
+   {
+      char bufferx[256];
+      sprintf(bufferx, "HTTP raw version: http_version=%d; version=%d.%d;", (int) r->http_version, (int) pweb->http_version_major, (int) pweb->http_version_minor);
+      mg_log_event(&(mg_system.log), NULL, bufferx, "mg_web: information", 0);
+   }
+*/
    pwebnginx->pweb = pweb;
    pweb->pweb_server = (void *) pwebnginx;
    pweb->evented = 1;
