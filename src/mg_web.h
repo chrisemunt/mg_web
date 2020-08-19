@@ -1079,8 +1079,10 @@ typedef struct tagMGSYS {
 
 
 typedef struct tagMGWEB {
-   int            connection_no;
+   //int            connection_no;
    int            evented;
+   int            http_version_major;
+   int            http_version_minor;
    int            wserver_chunks_response;
    int            request_clen;
    char           *script_name;
@@ -1092,8 +1094,8 @@ typedef struct tagMGWEB {
    int            query_string_len;
    int            response_streamed;
    int            response_clen;
-   int            response_size;
-   int            response_remaining;
+   unsigned int   response_size;
+   unsigned int   response_remaining;
    int            offs_content;
    char           *response_content;
    char           *response_headers;

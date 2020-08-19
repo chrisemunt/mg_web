@@ -43,6 +43,9 @@ Version 1.1.4 17 August 2020:
    Introduce the ability to stream response content back to the client using M Write statements (InterSystems Databases) or by using the supplied write^%zmgsis() procedure (YottaDB and InterSystems Databases).
    Include the configuration path and server names used for the request in the DB Server function's %system array.
 
+Version 1.1.5 19 August 2020:
+   Introduce HTTP v2 compliance.
+
 */
 
 
@@ -149,7 +152,7 @@ __try {
 /*
    {
       char bufferx[256];
-      sprintf(bufferx, "request=%s; path=%s; server=%s;", pweb->script_name_lc, pweb->ppath->name, pweb->psrv->name);
+      sprintf(bufferx, "HTTP version: %d.%d;", pweb->http_version_major, pweb->http_version_minor);
       mg_log_event(pweb->plog, pweb, bufferx, "mg_web: information", 0);
    }
 */
@@ -537,7 +540,7 @@ __try {
       if (rc == CACHE_SUCCESS) {
          isc_pop_value(pcon, &(pweb->output_val), DBX_DTYPE_STR);
          pweb->response_size = (pweb->output_val.api_size - 5);
-         if (pweb->response_size > (int) (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE)) {
+         if (pweb->response_size > (unsigned int) (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE)) {
             get = (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE);
             memcpy((void *) pweb->output_val.svalue.buf_addr, (void *) pweb->output_val.num.str, get);
             pweb->output_val.svalue.len_used = get;
@@ -5062,7 +5065,7 @@ netx_tcp_command_reconnect:
    get = 0;
    if (pweb->response_size > 0) {
       get = pweb->response_size - 5; /* first 5 Bytes already read */
-      if (pweb->response_size > (int) (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE)) {
+      if (pweb->response_size > (unsigned int) (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE)) {
          get = (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE);
          pweb->response_remaining = (pweb->response_size - get);
       }
@@ -5071,7 +5074,7 @@ netx_tcp_command_reconnect:
 
    if (pweb->output_val.type == DBX_DTYPE_OREF) {
       pweb->output_val.svalue.buf_addr[offset + get] = '\0';
-      pweb->output_val.num.oref = (int) strtol(pweb->output_val.svalue.buf_addr + offset, NULL, 10);
+      pweb->output_val.num.oref = (unsigned int) strtol(pweb->output_val.svalue.buf_addr + offset, NULL, 10);
       pweb->output_val.num.int32 = pweb->output_val.num.oref;
    }
 
@@ -5145,7 +5148,7 @@ int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
       }
       pweb->response_remaining = mg_get_size((unsigned char *) pweb->db_chunk_head);
       MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
-      if ((pweb->output_val.svalue.len_used + pweb->response_size) > (int) (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE)) {
+      if ((pweb->output_val.svalue.len_used + pweb->response_size) > (unsigned int) (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE)) {
          /* Can't read the whole response, so start chunking */
          rc = CACHE_SUCCESS;
          break;
