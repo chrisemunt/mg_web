@@ -47,12 +47,13 @@ extern "C" {
 #endif
 
 typedef struct tagMGWEBIIS {
-   void *   phttp_context;
-   void *   pprovider;
-   void *   phttp_response;
-   void *   phttp_request;
-   PCSTR    rbuffer;
-   int      exit_code;
+   void *         phttp_context;
+   void *         pprovider;
+   void *         phttp_response;
+   void *         phttp_request;
+   HTTP_REQUEST * phttp_rawrequest;
+   PCSTR          rbuffer;
+   int            exit_code;
 } MGWEBIIS, *LPWEBIIS;
 
 #ifdef __cplusplus
@@ -104,6 +105,7 @@ public:
       pwebiis->pprovider = pProvider;
       pwebiis->phttp_response = pHttpResponse;
       pwebiis->phttp_request = pHttpRequest;
+      pwebiis->phttp_rawrequest = pHttpRequest->GetRawHttpRequest();
 
       pwebiis->rbuffer = (PCSTR) pHttpContext->AllocateRequestMemory(RBUFFER_SIZE);
 
@@ -116,6 +118,21 @@ public:
       pweb->pweb_server = (void *) pwebiis;
       pweb->evented = 0;
       pweb->wserver_chunks_response = 0;
+      pweb->http_version_major = pwebiis->phttp_rawrequest->Version.MajorVersion;
+      pweb->http_version_minor = pwebiis->phttp_rawrequest->Version.MajorVersion;
+      if ((pwebiis->phttp_rawrequest->Flags & HTTP_REQUEST_FLAG_HTTP2)) {
+         pweb->http_version_major = 2;
+         pweb->http_version_minor = 0;
+         pweb->wserver_chunks_response = 1;
+      }
+
+/*
+      {
+         char bufferx[256];
+         sprintf(bufferx, "HTTP raw version: %d.%d; flags=%lu ishttp2=%d", pweb->http_version_major, pweb->http_version_minor, pwebiis->phttp_rawrequest->Flags, (pwebiis->phttp_rawrequest->Flags & HTTP_REQUEST_FLAG_HTTP2));
+         mg_log_event(&(mg_system.log), NULL, bufferx, "mg_web: information", 0);
+      }
+*/
 
       /* Test for an error. */
       if (pHttpResponse != NULL) {
@@ -244,7 +261,7 @@ __try {
          Ref: http://forums.iis.net/p/1149967/1872171.aspx#1872171
       */
 
-      const HTTP_REQUEST *phttp_request = phttp_context->GetRequest()->GetRawHttpRequest();
+      const HTTP_REQUEST *phttp_request = ((MGWEBIIS *) pweb->pweb_server)->phttp_rawrequest;
       if (phttp_request->CookedUrl.QueryStringLength != 0) {
 
          DWORD query_len = phttp_request->CookedUrl.QueryStringLength / sizeof(WCHAR) - 1;
@@ -317,6 +334,14 @@ __try {
             if (!strcmp(name, "SERVER_SOFTWARE")) {
                sprintf_s(buffer, sizeof(buffer), "%s mg_web/%s", (char *) buff, DBX_VERSION);
                *pbuffer_size = (int) strlen(buffer);
+               buff = (PCSTR) buffer;
+            }
+            if (!strcmp(name, "SERVER_PROTOCOL")) {
+               strcpy_s(buffer, (*pbuffer_size) + 1, (char *) buff);
+               if (pweb->http_version_major == 2 && *pbuffer_size > 5 && buffer[5] == '1') {
+                  buffer[5] = (char) (pweb->http_version_major + 48);
+                  buffer[7] = (char) (pweb->http_version_minor + 48);
+               }
                buff = (PCSTR) buffer;
             }
 		      strcpy_s(pbuffer, (*pbuffer_size) + 1, (char *) buff);
