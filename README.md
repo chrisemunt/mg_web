@@ -3,14 +3,14 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-17 August 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+19 August 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 1.1; Revision 4.
+* Current Release: Version: 1.1; Revision 5.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
 
-**mg\_web** provides a high-performance minimalistic interface between three popular web servers ( **Microsoft IIS**, **Apache** and **Nginx** ) and M-like DB Servers ( **YottaDB**, **InterSystems IRIS** and **Cache** ).
+**mg\_web** provides a high-performance minimalistic interface between three popular web servers ( **Microsoft IIS**, **Apache** and **Nginx** ) and M-like DB Servers ( **YottaDB**, **InterSystems IRIS** and **Cache** ).  It is compliant with HTTP version 1.1 and 2.0.
 
 HTTP requests passed to the DB Server via **mg\_web** are processed by a simple function of the form:
 
@@ -36,7 +36,27 @@ A simple 'Hello World' function would look something like the following pseudo-c
           return Response
        }
 
-In production, the above function would, of course, be crafted in the scripting language provided by the DB Server.
+**mg_web** also provides a mode through which response content can be streamed back to the client using DB Server write statements.
+
+       DBServerFunction(CGI, Content, System)
+       {
+          stream = startstream(ByRef System)
+
+          // Create HTTP response headers
+          Write ”HTTP/1.1 200 OK” + crlf
+          Write ”Content-type: text/html” + crlf
+          Write crlf
+          //
+          // Add the HTML content
+          Write ”<html>" + crlf
+          Write ”<head><title>” + crlf
+          Write ”Hello World” + crlf
+          Write ”</title></head>” + crlf
+          Write ”<h1>Hello World</h1>” + crlf
+          return stream
+       }
+
+In production, the above functions would, of course, be crafted in the scripting language provided by the DB Server.
 
 ## Pre-requisites
 
@@ -115,3 +135,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Introduce the ability to stream response content back to the client using M Write statements (InterSystems Databases) or by using the supplied write^%zmgsis() procedure (YottaDB and InterSystems Databases).
 * Include the configuration path and server names used for the request in the DB Server function's %system array.
 
+### v1.1.5 (19 August 2020)
+
+* Introduce HTTP version 2 compliance.
