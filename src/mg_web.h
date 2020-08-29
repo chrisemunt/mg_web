@@ -89,6 +89,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <limits.h>
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
@@ -259,7 +260,9 @@ typedef int    xc_status_t;
 /* End of GT.M call-in interface */
 
 #define MG_DEFAULT_CONFIG        "timeout 30\n<server local>\ntype IRIS\nhost localhost\ntcp_port 7041\nusername _SYSTEM\npassword SYS\nnamespace USER\n</server>\n<location />\nfunction mgweb^%zmgsis\nservers local\n</location>\n"
+#define MG_DEFAULT_HEADER        "HTTP/1.1 200 OK\r\nContent-type: text/html"
 #define DBX_CGI_BASE             "REQUEST_METHOD\nSCRIPT_NAME\nQUERY_STRING\nSERVER_PROTOCOL\n\n"
+
 #define DBX_CGI_REQUEST_METHOD   0
 #define DBX_CGI_SCRIPT_NAME      1
 #define DBX_CGI_QUERY_STRING     2
@@ -483,7 +486,11 @@ typedef int    xc_status_t;
 
 typedef int (WINAPI * MG_LPFN_WSAFDISSET)       (SOCKET, fd_set *);
 
+typedef LPTHREAD_START_ROUTINE   DBX_THR_FUNCTION;
 typedef DWORD           DBXTHID;
+#define DBX_THR_TYPE    DWORD WINAPI
+#define DBX_THR_RETURN  ((DWORD) rc)
+
 typedef HINSTANCE       DBXPLIB;
 typedef FARPROC         DBXPROC;
 
@@ -551,7 +558,11 @@ typedef size_t          socklen_netx;
 
 #define NETX_FD_ISSET(fd, set) FD_ISSET(fd, set)
 
+typedef void  *(*DBX_THR_FUNCTION) (void * arg);
+
 typedef pthread_t       DBXTHID;
+#define DBX_THR_TYPE    void *
+#define DBX_THR_RETURN  NULL
 typedef void            *DBXPLIB;
 typedef void            *DBXPROC;
 
@@ -825,6 +836,17 @@ typedef struct tagDBXMUTEX {
 } DBXMUTEX, *PDBXMUTEX;
 
 
+typedef struct tagDBXTHR {
+   DBXTHID           thread_id;
+#if defined(_WIN32)
+   DWORD             stack_size;
+   HANDLE            thread_handle;
+#else
+   int               stack_size;
+#endif
+} DBXTHR, *PDBXTHR;
+
+
 typedef struct tagDBXCVAL {
    void           *pstr;
    CACHE_EXSTR    zstr;
@@ -1052,11 +1074,15 @@ typedef struct tagDBXCON {
    DBXGTMSO       *p_gtm_so;
    short          increment;
    int            net_connection;
+   int            closed;
    int            error_no;
    int            timeout;
    int            eof;
    SOCKET         cli_socket;
+   int            int_pipe[2];
    char           info[256];
+   int            stream_tail_len;
+   unsigned char  stream_tail[8];
    MGSRV          *psrv;
    struct tagDBXCON  *pnext;
 } DBXCON, *PDBXCON;
@@ -1078,8 +1104,73 @@ typedef struct tagMGSYS {
 } MGSYS, *LPMGSYS;
 
 
+#define MG_WS_BLOCK_DATA_SIZE              4096
+
+typedef unsigned long long    mg_uint64_t;
+typedef long long             mg_int64_t;
+
+typedef struct tagMGWSMESS {
+    int              type;
+    unsigned char *  buffer;
+    size_t           buffer_size;
+    int              done;
+    size_t           written;
+} MGWSMESS, *PMGWSMESS;
+
+
+typedef struct tagMGWSFDATA {
+   mg_uint64_t       application_data_offset;
+   unsigned char *   application_data;
+   unsigned char     fin;
+   unsigned char     opcode;
+   unsigned int      utf8_state;
+   mg_int64_t        message_length;
+} MGWSFDATA, *PMGWSFDATA;
+
+
+typedef struct tagMGWSRSTATE {
+   int               framing_state;
+   int               closing;
+   unsigned short    status_code;
+   unsigned char     fin;
+   unsigned char     opcode;
+   MGWSFDATA         control_frame;
+   MGWSFDATA         message_frame;
+   MGWSFDATA *       frame;
+   mg_int64_t        payload_length;
+   mg_int64_t        mask_offset;
+   mg_int64_t        extension_bytes_remaining;
+   int               payload_length_bytes_remaining;
+   int               masking;
+   int               mask_index;
+   unsigned char     mask[4];
+} MGWSRSTATE, *PMGWSRSTATE;
+
+#define MG_WEBSOCKET_NOCON             0
+#define MG_WEBSOCKET_HEADERS_SENT      10
+#define MG_WEBSOCKET_CONNECTED         20
+#define MG_WEBSOCKET_CLOSING           30
+#define MG_WEBSOCKET_CLOSED            40
+#define MG_WEBSOCKET_CLOSED_BYSERVER   50
+#define MG_WEBSOCKET_CLOSED_BYCLIENT   60
+
+typedef struct tagMGWEBSOCK {
+   short             status;
+   short             binary;
+   int               closing;
+   int               protocol_version;
+   char              sec_websocket_key[256];
+   char              sec_websocket_protocol[32];
+   unsigned char     block[MG_WS_BLOCK_DATA_SIZE];
+   mg_int64_t        block_size;
+   unsigned char     status_code_buffer[2];
+   size_t            remaining_length;
+   DBXTHR            db_read_thread;
+   //DBXMUTEX          write_mutex;
+} MGWEBSOCK, *LPMGWEBSOCK;
+
+
 typedef struct tagMGWEB {
-   //int            connection_no;
    int            evented;
    int            http_version_major;
    int            http_version_minor;
@@ -1112,6 +1203,8 @@ typedef struct tagMGWEB {
    ydb_buffer_t   yargs[DBX_MAXARGS];
    MGPATH         *ppath;
    MGSRV          *psrv;
+   DBXCON         *pcon;
+   MGWEBSOCK      *pwsock;
    void           *pweb_server;
 } MGWEB, *LPMGWEB;
 
@@ -1144,6 +1237,23 @@ int                     mg_client_write               (MGWEB *pweb, unsigned cha
 int                     mg_client_read                (MGWEB *pweb, unsigned char *pbuffer, int buffer_size);
 int                     mg_suppress_headers           (MGWEB *pweb);
 int                     mg_submit_headers             (MGWEB *pweb);
+
+int                     mg_websocket_init             (MGWEB *pweb);
+int                     mg_websocket_create_lock      (MGWEB *pweb);
+int                     mg_websocket_destroy_lock     (MGWEB *pweb);
+int                     mg_websocket_lock             (MGWEB *pweb);
+int                     mg_websocket_unlock           (MGWEB *pweb);
+int                     mg_websocket_write            (MGWEB *pweb, char *buffer, int len);
+int                     mg_websocket_frame_init       (MGWEB *pweb);
+int                     mg_websocket_frame_read       (MGWEB *pweb, MGWSRSTATE *pread_state);
+int                     mg_websocket_frame_exit       (MGWEB *pweb);
+size_t                  mg_websocket_read_block       (MGWEB *pweb, char *buffer, size_t bufsiz);
+size_t                  mg_websocket_read             (MGWEB *pweb, char *buffer, size_t bufsiz);
+size_t                  mg_websocket_queue_block      (MGWEB *pweb, int type, unsigned char *buffer, size_t buffer_size, short locked);
+size_t                  mg_websocket_write_block      (MGWEB *pweb, int type, unsigned char *buffer, size_t buffer_size);
+int                     mg_websocket_write            (MGWEB *pweb, char *buffer, int len);
+int                     mg_websocket_exit             (MGWEB *pweb);
+
 
 /* Core code page */
 int                     mg_web                        (MGWEB *pweb);
@@ -1205,6 +1315,10 @@ int                     mg_log_buffer                 (DBXLOG *plog, MGWEB *pweb
 DBXPLIB                 mg_dso_load                   (char *library);
 DBXPROC                 mg_dso_sym                    (DBXPLIB p_library, char *symbol);
 int                     mg_dso_unload                 (DBXPLIB p_library);
+int                     mg_thread_create              (DBXTHR *pthr, DBX_THR_FUNCTION function, void * arg);
+int                     mg_thread_terminate           (DBXTHR *pthr);
+int                     mg_thread_join                (DBXTHR *pthr);
+int                     mg_thread_exit                (void);
 DBXTHID                 mg_current_thread_id          (void);
 unsigned long           mg_current_process_id         (void);
 int                     mg_error_message              (DBXCON *pcon, int error_code);

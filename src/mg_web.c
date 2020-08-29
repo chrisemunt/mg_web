@@ -46,11 +46,17 @@ Version 1.1.4 17 August 2020:
 Version 1.1.5 19 August 2020:
    Introduce HTTP v2 compliance.
 
+Version 2.0.6 29 August 2020:
+   Introduce WebSocket support.
+   Introduce stream ASCII mode.
+   Reset the UCI/Namespace after completing each web request (and before re-using the same DB server process for processing the next web request). 
+   Insert a default HTTP response header (Content-type: text/html) if the application doesn't return one.
 */
 
 
 #include "mg_websys.h"
 #include "mg_web.h"
+#include "mg_websocket.h"
 
 
 #if !defined(_WIN32)
@@ -120,7 +126,6 @@ __try {
    pweb->input_buf.len_used += 5;
 
    rc = mg_get_all_cgi_variables(pweb);
-
    rc = mg_get_path_configuration(pweb);
 
    if (!pweb->ppath || rc == CACHE_FAILURE) {
@@ -185,6 +190,8 @@ __try {
    pweb->requestno = (char *) (p + 3);
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBSYS, DBX_DTYPE_STR);
    pweb->input_buf.len_used += (len + 5);
+
+   rc = mg_websocket_check(pweb);
 
    if (pweb->evented) {
       return rc;
@@ -302,33 +309,39 @@ __try {
 
          pweb->response_clen = (pweb->response_size - (pweb->response_headers_len + 5)); /* 5 Byte offset (rno) */
          get = (pweb->output_val.svalue.len_used - (pweb->response_headers_len + 10)); /* 10 Byte offset (blen + rno) */
-/*
-         {
-            char bufferx[1024];
-            sprintf(bufferx, "HTTP Response (raw headers): len_used=%d; alloc=%d; content-length=%d; headers_len=%d; get=%d;", pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, pweb->response_clen, pweb->response_headers_len, get);
-            mg_log_buffer(pweb->plog, pweb, (char *) pweb->response_headers, (int) pweb->response_headers_len, bufferx, 0);
-         }
-*/
-         p = (unsigned char *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4));
-         strcpy((char *) p, pweb->response_headers);
-         pweb->response_headers = (char *) p;
-
-         if (pweb->response_streamed && pweb->response_remaining > 0) {
-            if (pweb->wserver_chunks_response == 0)
-               strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
-            else
-               strcpy(buffer, "\r\n\r\n");
-         }
-         else {
-            pweb->response_streamed = 0;
-            sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
-         }
-         strcat(pweb->response_headers, buffer);
-         pweb->response_headers_len = (int) strlen(pweb->response_headers);
       }
       else {
-         rc = CACHE_FAILURE;
+         pweb->response_content = (char *) (pweb->output_val.svalue.buf_addr + 10);
+         pweb->response_headers = (char *) MG_DEFAULT_HEADER;
+         pweb->response_headers_len = (int) strlen(pweb->response_headers) + 4;
+
+         pweb->response_clen = (pweb->response_size - 5); /* 5 Byte offset (rno) */
+         get = (pweb->output_val.svalue.len_used - 10); /* 10 Byte offset (blen + rno) */
       }
+
+/*
+      {
+         char bufferx[1024];
+         sprintf(bufferx, "HTTP Response (raw headers): len_used=%d; alloc=%d; content-length=%d; headers_len=%d; get=%d;", pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, pweb->response_clen, pweb->response_headers_len, get);
+         mg_log_buffer(pweb->plog, pweb, (char *) pweb->response_headers, (int) pweb->response_headers_len, bufferx, 0);
+      }
+*/
+      p = (unsigned char *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4));
+      strcpy((char *) p, pweb->response_headers);
+      pweb->response_headers = (char *) p;
+
+      if (pweb->response_streamed && pweb->response_remaining > 0) {
+         if (pweb->wserver_chunks_response == 0)
+            strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
+         else
+            strcpy(buffer, "\r\n\r\n");
+      }
+      else {
+         pweb->response_streamed = 0;
+         sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
+      }
+      strcat(pweb->response_headers, buffer);
+      pweb->response_headers_len = (int) strlen(pweb->response_headers);
    }
 
    if (rc != CACHE_SUCCESS) {
@@ -359,6 +372,14 @@ __try {
 */
 
    MG_LOG_RESPONSE_HEADER(pweb);
+
+   if (pweb->pwsock) {
+      pweb->pcon = pcon;
+      rc = mg_websocket_connection(pweb);
+      rc = mg_websocket_disconnect(pweb);
+      return rc;
+   }
+
    mg_submit_headers(pweb);
    if (get) {
       if (pweb->response_streamed) {
@@ -854,6 +875,7 @@ DBXCON * mg_obtain_connection(MGWEB *pweb, MGSRV *psrv, MGPATH *ppath)
          pcon = pcon_free;
          pcon->alloc = 1;
          pcon->inuse = 1;
+         pcon->closed = 0;
       }
       else {
          pcon = (DBXCON *) mg_malloc(NULL, sizeof(DBXCON), 0);
@@ -867,6 +889,9 @@ DBXCON * mg_obtain_connection(MGWEB *pweb, MGSRV *psrv, MGPATH *ppath)
             }
             pcon->alloc = 1;
             pcon->inuse = 1;
+            pcon->closed = 0;
+            pcon->int_pipe[0] = 0;
+            pcon->int_pipe[1] = 0;
          }
       }
    }
@@ -892,6 +917,7 @@ DBXCON * mg_obtain_connection(MGWEB *pweb, MGSRV *psrv, MGPATH *ppath)
    }
 
    pcon->net_connection = 0;
+   pcon->closed = 0;
    pcon->timeout = psrv->timeout;
 
 /*
@@ -972,7 +998,8 @@ int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
       }
 */
       if (rc != CACHE_SUCCESS) {
-         pcon->net_connection = 0;
+         pcon->alloc = 0;
+         pcon->closed = 1;
          rc = CACHE_NOCON;
          mg_error_message(pcon, rc);
          return rc;
@@ -989,7 +1016,7 @@ int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
 
       if (rc != CACHE_SUCCESS) {
          pcon->alloc = 0;
-         pcon->net_connection = 0;
+         pcon->closed = 1;
          rc = CACHE_NOCON;
          mg_error_message(pcon, rc);
          return rc;
@@ -1090,6 +1117,7 @@ int mg_release_connection(MGWEB *pweb, DBXCON *pcon, int close_connection)
    }
 
    pcon->net_connection = 0;
+   pcon->closed = 1;
    pcon->inuse = 0;
    pcon->alloc = 0;
 
@@ -3957,6 +3985,118 @@ int mg_dso_unload(DBXPLIB p_library)
 }
 
 
+int mg_thread_create(DBXTHR *pthr, DBX_THR_FUNCTION function, void * arg)
+{
+#if defined(_WIN32)
+   int rc;
+   DWORD creation_flags, stack_size;
+   LPSECURITY_ATTRIBUTES thread_attributes;
+
+   thread_attributes = NULL;
+   stack_size = 0;
+   creation_flags = 0;
+
+   pthr->thread_handle = CreateThread(thread_attributes, stack_size, (DBX_THR_FUNCTION) function, (LPVOID) arg, creation_flags, (LPDWORD) &(pthr->thread_id));
+   if (pthr->thread_handle)
+      rc = CACHE_SUCCESS;
+   else
+      rc = CACHE_FAILURE;
+
+   return rc;
+
+#else
+
+   int rc;
+   size_t stack_size, new_stack_size;
+   pthread_attr_t attr;
+
+   stack_size = 0;
+   new_stack_size = 0;
+
+   pthread_attr_init(&attr);
+   pthread_attr_getstacksize(&attr, &stack_size);
+   new_stack_size = 0x60000; /* 393216 */
+
+   pthread_attr_setstacksize(&attr, new_stack_size);
+
+   rc = pthread_create(&(pthr->thread_id), &attr, (DBX_THR_FUNCTION) function, (void *) arg);
+
+   pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+
+   return rc;
+#endif
+
+}
+
+
+int mg_thread_terminate(DBXTHR *pthr)
+{
+   int rc;
+
+#if defined(_WIN32)
+   rc = -1;
+   if (pthr->thread_handle) {
+      if (TerminateThread(pthr->thread_handle, 0)) {
+         rc = 0;
+      }
+   }
+#else
+#if defined(AIX) || defined(AIX5)
+   rc = 0;
+   if (pthread_kill(pthr->thread_id, SIGUSR1)) {
+      rc = -1;
+   }
+#else
+   rc = 0;
+   if (pthread_cancel(pthr->thread_id)) {
+      rc = -1;
+   }
+#endif
+#endif
+
+   return rc;
+}
+
+
+int mg_thread_detach(void)
+{
+   int rc;
+
+#if defined(_WIN32)
+   rc = 0;
+#else
+   rc = pthread_detach(pthread_self());
+#endif
+
+   return rc;
+}
+
+
+int mg_thread_join(DBXTHR *pthr)
+{
+   int rc;
+
+   rc = 0;
+#if defined(_WIN32)
+   rc = (int) WaitForSingleObject(pthr->thread_handle, INFINITE);
+#else
+   rc = pthread_join(pthr->thread_id, NULL);
+#endif
+
+   return rc;
+}
+
+
+int mg_thread_exit(void)
+{
+#if defined(_WIN32)
+   ExitThread(0);
+#else
+   pthread_exit(NULL);
+#endif
+}
+
+
 DBXTHID mg_current_thread_id(void)
 {
 #if defined(_WIN32)
@@ -4667,6 +4807,7 @@ int netx_tcp_connect(DBXCON *pcon, int context)
    if (ipv6) {
       if (connected) {
          pcon->net_connection = 1;
+         pcon->closed = 0;
          return 0;
       }
       else {
@@ -4899,6 +5040,7 @@ int netx_tcp_connect(DBXCON *pcon, int context)
    }
 
    pcon->net_connection = 1;
+   pcon->closed = 0;
 
    return 0;
 }
@@ -4969,7 +5111,7 @@ int netx_tcp_command(DBXCON *pcon, MGWEB *pweb, int command, int context)
 /*
    {
       char bufferx[256];
-      sprintf(bufferx, "netx_tcp_command SEND cmnd=%d; size=%d; netbuf_used=%d; requestno_in=%d; requestno_out=%d;", command, pweb->input_buf.len_used, netbuf_used, pweb->requestno_in, pweb->requestno_out);
+      sprintf(bufferx, "netx_tcp_command SEND cmnd=%d; size=%d; netbuf_used=%d; requestno_in=%d; requestno_out=%d; pcon->closed=%d;", command, pweb->input_buf.len_used, netbuf_used, pweb->requestno_in, pweb->requestno_out, pcon->closed);
       mg_log_buffer(&(mg_system.log), pweb, netbuf, netbuf_used, bufferx, 0);
    }
 */
@@ -4979,6 +5121,7 @@ int netx_tcp_command(DBXCON *pcon, MGWEB *pweb, int command, int context)
 netx_tcp_command_reconnect:
 
    rc = netx_tcp_write(pcon, (unsigned char *) netbuf, netbuf_used);
+
    if (rc < 0) {
       if (reconnect) {
          return rc;
@@ -5024,6 +5167,13 @@ netx_tcp_command_reconnect:
    pweb->output_val.svalue.len_used = 0;
 
    rc = netx_tcp_read(pcon, (unsigned char *) pweb->output_val.svalue.buf_addr, offset, pcon->timeout, 1);
+/*
+   {
+      char bufferx[256];
+      sprintf(bufferx, "netx_tcp_command RECV rc=%d; pcon->closed=%d;", rc, pcon->closed);
+      mg_log_buffer(&(mg_system.log), pweb, netbuf, netbuf_used, bufferx, 0);
+   }
+*/
    if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
       return rc;
    }
@@ -5050,6 +5200,12 @@ netx_tcp_command_reconnect:
    if (pweb->response_size == 0 && pweb->output_val.svalue.buf_addr[9] == '\x01') {
       pweb->response_streamed = 1;
       pweb->response_size = 5;
+      return netx_tcp_read_stream(pcon, pweb);
+   }
+   else if (pweb->response_size == 0 && pweb->output_val.svalue.buf_addr[9] == '\x02') {
+      pweb->response_streamed = 2;
+      pweb->response_size = 5;
+      pcon->stream_tail_len = 0;
       return netx_tcp_read_stream(pcon, pweb);
    }
 
@@ -5095,9 +5251,77 @@ netx_tcp_command_reconnect:
 
 int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
 {
-   int rc;
+   int rc, get, eos;
 
    rc = CACHE_SUCCESS;
+
+   if (pweb->response_streamed == 2) { /* ASCII stream mode */
+
+      pweb->response_remaining = 0;
+      memset((void *) pweb->db_chunk_head, 0, sizeof(pweb->db_chunk_head));
+
+      if (pcon->stream_tail_len > 0) {
+         memcpy((void *) (pweb->output_val.svalue.buf_addr + pweb->output_val.svalue.len_used), (void *) pcon->stream_tail, pcon->stream_tail_len);
+         pweb->output_val.svalue.len_used += pcon->stream_tail_len;
+         pcon->stream_tail_len = 0;
+      }
+
+      eos = 0;
+      get = (pweb->output_val.svalue.len_alloc - (pweb->output_val.svalue.len_used + DBX_HEADER_SIZE));
+      while (get) {
+         rc = netx_tcp_read(pcon, (unsigned char *) pweb->output_val.svalue.buf_addr + pweb->output_val.svalue.len_used, get, pcon->timeout, 0);
+/*
+         {
+            char bufferx[256];
+            sprintf(bufferx, "ASCII stream response from DB Server: rc=%d; len_used=%d; get=%d;", rc, pweb->output_val.svalue.len_used, get);
+            mg_log_buffer(pweb->plog, pweb, pweb->output_val.svalue.buf_addr, pweb->output_val.svalue.len_used + (rc > 0 ? rc : 0), bufferx, 0);
+         }
+*/
+         if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
+            break;
+         }
+         else if (rc == 0) {
+            rc = NETX_READ_EOF;
+            break;
+         }
+
+         get -= rc;
+         pweb->output_val.svalue.len_used += rc;
+         pweb->response_size += rc;
+/*
+         {
+            char bufferx[256];
+            sprintf(bufferx, "ASCII stream response from DB Server (last 4 Bytes): len_used=%d; %x %x %x %x;", pweb->output_val.svalue.len_used, (unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 1], (unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 2], (unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 3], (unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 4]);
+            mg_log_buffer(pweb->plog, pweb, pweb->output_val.svalue.buf_addr, pweb->output_val.svalue.len_used, bufferx, 0);
+         }
+*/
+         if (pweb->output_val.svalue.len_used > 4) {
+            if (((unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 1]) == 0xff && ((unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 2]) == 0xff && ((unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 3]) == 0xff && ((unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 4]) == 0xff) {
+               eos = 1;
+               break;
+            }
+         }
+      }
+
+      MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, pweb->output_val.svalue.buf_addr, pweb->output_val.svalue.len_used);
+
+      if (pweb->output_val.svalue.len_used > 4) {
+         if (eos) {
+            pweb->response_remaining = 0;
+            pweb->output_val.svalue.len_used -= 4;
+            pweb->response_size -= 4;
+         }
+         else {
+            pcon->stream_tail_len = 4;
+            memcpy((void *) pcon->stream_tail, (void *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used - 4)), pcon->stream_tail_len);
+            pweb->output_val.svalue.len_used -= 4;
+            pweb->response_remaining = 4;
+         }
+         rc = CACHE_SUCCESS;
+      }
+      return rc;
+   }
+
    if (pweb->response_remaining == 0) {
       rc = netx_tcp_read(pcon, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
       if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
@@ -5156,7 +5380,6 @@ int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
    }
 
    return rc;
-
 }
 
 
@@ -5290,7 +5513,7 @@ int netx_tcp_disconnect(DBXCON *pcon, int context)
 
    }
 
-   pcon->net_connection = 0;
+   pcon->closed = 1;
 
    return 0;
 
@@ -5301,7 +5524,8 @@ int netx_tcp_write(DBXCON *pcon, unsigned char *data, int size)
 {
    int n, rc, errorno, total;
 
-   if (pcon->net_connection == 0) {
+
+   if (pcon->closed == 1) {
       strcpy(pcon->error, "TCP Write Error: Socket is Closed");
       return -1;
    }
@@ -5339,7 +5563,7 @@ int netx_tcp_write(DBXCON *pcon, unsigned char *data, int size)
 
 int netx_tcp_read(DBXCON *pcon, unsigned char *data, int size, int timeout, int context)
 {
-   int result, n;
+   int result, n, max_fd;
    int len;
    fd_set rset, eset;
    struct timeval tval;
@@ -5365,7 +5589,24 @@ int netx_tcp_read(DBXCON *pcon, unsigned char *data, int size, int timeout, int 
       FD_SET(pcon->cli_socket, &rset);
       FD_SET(pcon->cli_socket, &eset);
 
-      n = NETX_SELECT((int) (pcon->cli_socket + 1), &rset, NULL, &eset, &tval);
+#if defined(_WIN32)
+      max_fd = (int) (pcon->cli_socket + 1);
+      n = NETX_SELECT((int) max_fd, &rset, NULL, &eset, &tval);
+#else
+      if (pcon->int_pipe[0] > 0) {
+         FD_SET(pcon->int_pipe[0], &rset);
+      }
+      max_fd = ((int) pcon->cli_socket) > pcon->int_pipe[0] ? ((int) pcon->cli_socket) : pcon->int_pipe[0];
+      n = NETX_SELECT(max_fd + 1, &rset, NULL, &eset, &tval);
+      if (n > 0 && pcon->int_pipe[0] > 0 && NETX_FD_ISSET(pcon->int_pipe[0], &rset)) {
+         n = read(pcon->int_pipe[0], data, 4);
+         if (!strncmp((char *) data, (char *) "exit", 4)) {
+            data[0] = '\0';
+            result = NETX_READ_ERROR;
+            break;
+         }
+      }
+#endif
 
       if (n == 0) {
          sprintf(pcon->error, "TCP Read Error: Server did not respond within the timeout period (%d seconds)", timeout);
@@ -5384,13 +5625,13 @@ int netx_tcp_read(DBXCON *pcon, unsigned char *data, int size, int timeout, int 
       if (n < 1) {
          if (n == 0) {
             result = NETX_READ_EOF;
-            pcon->net_connection = 0;
+            pcon->closed = 1;
             pcon->eof = 1;
          }
          else {
             result = NETX_READ_ERROR;
             len = 0;
-            pcon->net_connection = 0;
+            pcon->closed = 1;
          }
          break;
       }
@@ -5411,7 +5652,6 @@ int netx_tcp_read(DBXCON *pcon, unsigned char *data, int size, int timeout, int 
    }
    return result;
 }
-
 
 
 int netx_get_last_error(int context)
