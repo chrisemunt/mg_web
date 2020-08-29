@@ -38,6 +38,7 @@
 #endif
 
 #include "mg_web.c"
+#include "mg_websocket.c"
 
 #define MG_MAGIC_TYPE1        "application/x-mgweb"
 #define MG_MAGIC_TYPE2        "text/mgweb"
@@ -89,6 +90,7 @@ typedef struct tagMGWEBNGINX {
    ngx_str_t            thread_pool;
    char                 mg_thread_pool[64];
    int                  async;
+   DBXMUTEX             wsmutex;
    MGWEB                *pweb;
 } MGWEBNGINX, *LPWEBNGINX;
 
@@ -136,10 +138,10 @@ static char *        mg_merge_location_conf     (ngx_conf_t *cf, void *parent, v
 ngx_int_t            mg_master_init             (ngx_log_t *log);
 void                 mg_master_exit             (ngx_cycle_t *cycle);
 ngx_int_t            mg_module_init             (ngx_cycle_t *cycle);
-ngx_int_t            mg_process_init            (ngx_cycle_t *cycle);
-void                 mg_process_exit            (ngx_cycle_t *cycle);
-ngx_int_t            mg_thread_init             (ngx_cycle_t *cycle);
-void                 mg_thread_exit             (ngx_cycle_t *cycle);
+ngx_int_t            mg_worker_process_init     (ngx_cycle_t *cycle);
+void                 mg_worker_process_exit     (ngx_cycle_t *cycle);
+ngx_int_t            mg_worker_thread_init      (ngx_cycle_t *cycle);
+void                 mg_worker_thread_exit      (ngx_cycle_t *cycle);
 int                  mg_check_file_type         (char *mg_file_types_main, char *mg_file_types_server, char *mg_file_types_loc, char *type);
 void *               mg_malloc_nginx            (void *pweb_server, unsigned long size);
 void *               mg_remalloc_nginx          (void *pweb_server, void *p, unsigned long size);
@@ -244,10 +246,10 @@ ngx_module_t  ngx_http_mg_web = {
    NGX_HTTP_MODULE,           /* module type */
    mg_master_init,            /* init master */
    mg_module_init,            /* init module */
-   mg_process_init,           /* init process */
-   mg_thread_init,            /* init thread */
-   mg_thread_exit,            /* exit thread */
-   mg_process_exit,           /* exit process */
+   mg_worker_process_init,    /* init process */
+   mg_worker_thread_init,     /* init thread */
+   mg_worker_thread_exit,     /* exit thread */
+   mg_worker_process_exit,    /* exit process */
    mg_master_exit,            /* exit master */
    NGX_MODULE_V1_PADDING
 };
@@ -602,25 +604,6 @@ static void mg_execute_pool(void *data, ngx_log_t *log)
 
 static void mg_execute_pool_completion(ngx_event_t *ev)
 {
-/*
-   ngx_http_request_t *r = (ngx_http_request_t *) ev->data;
-*/
-
-/*
-   {
-      char bufferx[256];
-      sprintf(bufferx, "mg_execute_pool_completion: r=%p;", r);
-      mg_log_event(&(mg_system.log), NULL, "mg_execute_pool_completion", bufferx, 0);
-   }
-*/
-
-/*
-   r->main->blocked --;
-   r->aio = 0;
-
-   ngx_http_handler(r);
-*/
-
    return;
 }
 #endif /* #if defined(NGX_THREADS) */
@@ -991,13 +974,13 @@ ngx_int_t mg_module_init(ngx_cycle_t *cycle)
 }
 
 
-ngx_int_t mg_process_init(ngx_cycle_t *cycle)
+ngx_int_t mg_worker_process_init(ngx_cycle_t *cycle)
 {
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, NULL, "mg_web: mg_process_init()", "mg_web: trace", 0);
-   mg_log_event(&debug_log, NULL, mg_system.config_file, "mg_web: trace: mg_module_init(): config file", 0);
-   mg_log_event(&debug_log, NULL, mg_system.log.log_file, "mg_web: trace: mg_module_init(): log file", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_worker_process_init()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, mg_system.config_file, "mg_web: trace: mg_worker_process_init(): config file", 0);
+   mg_log_event(&debug_log, NULL, mg_system.log.log_file, "mg_web: trace: mg_worker_process_init(): log file", 0);
 #endif
 
    mg_worker_init();
@@ -1009,10 +992,10 @@ ngx_int_t mg_process_init(ngx_cycle_t *cycle)
 }
 
 
-void mg_process_exit(ngx_cycle_t *cycle)
+void mg_worker_process_exit(ngx_cycle_t *cycle)
 {
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, NULL, "mg_web: mg_process_exit()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_worker_process_exit()", "mg_web: trace", 0);
 #endif
 
    mg_worker_exit();
@@ -1021,21 +1004,21 @@ void mg_process_exit(ngx_cycle_t *cycle)
 }
 
 
-ngx_int_t mg_thread_init(ngx_cycle_t *cycle)
+ngx_int_t mg_worker_thread_init(ngx_cycle_t *cycle)
 {
 
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, NULL, "mg_web: mg_process_init()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_worker_thread_init()", "mg_web: trace", 0);
 #endif
 
    return NGX_OK;
 }
 
 
-void mg_thread_exit(ngx_cycle_t *cycle)
+void mg_worker_thread_exit(ngx_cycle_t *cycle)
 {
 #if defined(MG_API_TRACE)
-   mg_log_event(&debug_log, NULL, "mg_web: mg_thread_exit()", "mg_web: trace", 0);
+   mg_log_event(&debug_log, NULL, "mg_web: mg_worker_thread_exit()", "mg_web: trace", 0);
 #endif
 
    return;
@@ -1617,5 +1600,380 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 #endif
 
+}
+
+
+int mg_websocket_init(MGWEB *pweb)
+{
+   int n, len;
+   char *pbuffer;
+   char token[256], hash[256], sec_websocket_accept[256], header[2048];
+   ngx_buf_t *b;
+   ngx_chain_t out;
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+
+   strcpy(token, pweb->pwsock->sec_websocket_key);
+   strcat(token, MG_WS_WEBSOCKET_GUID);
+
+   mg_sha1((unsigned char *) hash, (const unsigned char *) token, (int) strlen(token));
+   hash[20] = '\0';
+
+   n = mg_b64_encode(hash, sec_websocket_accept, 20, 0);
+
+   sec_websocket_accept[n] = '\0';
+
+   strcpy(header, "");
+   strcat(header, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ");
+   strcat(header, sec_websocket_accept);
+   strcat(header, "\r\n");
+   if (pweb->pwsock->sec_websocket_protocol[0]) {
+      strcat(header, "Sec-WebSocket-Protocol: ");
+      strcat(header, pweb->pwsock->sec_websocket_protocol);
+      strcat(header, "\r\n");
+   }
+   strcat(header, "\r\n");
+
+   pwebnginx->r->headers_out.status = NGX_HTTP_SWITCHING_PROTOCOLS;
+
+   len = (int) strlen(header);
+   pbuffer = ngx_pcalloc(pwebnginx->r->pool, 4096);
+   strcpy(pbuffer, header);
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: websocket startup netx_tcp_read len=%d;", len);
+   mg_log_buffer(pweb->plog, pweb, header, len, bufferx, 0);
+}
+*/
+   b = ngx_pcalloc(pwebnginx->r->pool, sizeof(ngx_buf_t));
+   if (b == NULL) {
+      ngx_log_error(NGX_LOG_ERR, pwebnginx->r->connection->log, 0, "Failed to allocate WebSocket response buffer");
+      return CACHE_FAILURE;
+   }
+
+   b->pos = (u_char *) pbuffer; /* first position in memory of the data */
+   b->last = (u_char *) (pbuffer + len); /* last position */
+
+   b->memory = 1; /* content is in read-only memory */
+   /* (i.e., filters should copy it rather than rewrite in place) */
+
+   b->last_buf = 1; /* there will be no more buffers in the request */
+
+   /* Now the module attaches it to the chain link: */
+
+   out.buf = b;
+   out.next = NULL;
+
+   ngx_http_output_filter(pwebnginx->r, &out);
+
+   pweb->pwsock->status = MG_WEBSOCKET_HEADERS_SENT;
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: websocket startup netx_tcp_read len=%d; pweb->pwsock->status=%d;", len, pweb->pwsock->status);
+   mg_log_buffer(pweb->plog, pweb, header, len, bufferx, 0);
+}
+*/
+   return CACHE_SUCCESS;
+}
+
+
+int mg_websocket_create_lock(MGWEB *pweb)
+{
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+   mg_mutex_create(&(pwebnginx->wsmutex));
+
+   return 0;
+}
+
+
+int mg_websocket_destroy_lock(MGWEB *pweb)
+{
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+   mg_mutex_destroy(&(pwebnginx->wsmutex));
+
+   return 0;
+}
+
+
+int mg_websocket_lock(MGWEB *pweb)
+{
+   int rc;
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+   rc = mg_mutex_lock(&(pwebnginx->wsmutex), 0);
+
+   return rc;
+}
+
+
+int mg_websocket_unlock(MGWEB *pweb)
+{
+   int rc;
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+   rc = mg_mutex_unlock(&(pwebnginx->wsmutex));
+
+   return rc;
+}
+
+
+int mg_websocket_frame_init(MGWEB *pweb)
+{
+   int rc;
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+
+   rc = ngx_blocking(pwebnginx->r->connection->fd);
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: websocket ngx_blocking=%d;", rc);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web", 0);
+}
+*/
+   if (pweb->pwsock && rc == 0) {
+      return CACHE_SUCCESS;
+   }
+   else {
+      return CACHE_FAILURE;
+   }
+}
+
+
+int mg_websocket_frame_read(MGWEB *pweb, MGWSRSTATE *pread_state)
+{
+   pweb->pwsock->block_size = mg_websocket_read_block(pweb, (char *) pweb->pwsock->block, sizeof(pweb->pwsock->block));
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: websocket mg_websocket_read_block=%d;", (int) pweb->pwsock->block_size);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web", 0);
+}
+*/
+   if (pweb->pwsock->block_size < 1) {
+      pread_state->framing_state = MG_WS_DATA_FRAMING_CLOSE;
+      pread_state->status_code = MG_WS_STATUS_CODE_PROTOCOL_ERROR;
+      return -1;
+   }
+
+   mg_websocket_incoming_frame(pweb, pread_state, (char *) pweb->pwsock->block, pweb->pwsock->block_size);
+
+   return 0;
+}
+
+
+int mg_websocket_frame_exit(MGWEB *pweb)
+{
+   int rc;
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+
+   rc = ngx_nonblocking(pwebnginx->r->connection->fd);
+
+   return rc;
+}
+
+
+size_t mg_websocket_read_block(MGWEB *pweb, char *buffer, size_t bufsiz)
+{
+   int n, offs;
+   size_t get;
+   long long payload_length;
+
+   offs = 0;
+   payload_length = 0;
+
+   if (pweb->pwsock->remaining_length == 0) {
+
+      n = (int) mg_websocket_read(pweb, (char *) buffer, 6);
+      offs = 6;
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: websocket mg_websocket_read=%d;", (int) n);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web READ FROM  WS", 0);
+}
+*/
+      if (n == 0) {
+         return n;
+      }
+      payload_length = (long long) MG_WS_FRAME_GET_PAYLOAD_LEN((unsigned char) buffer[1]);
+      if (payload_length == 126) {
+         n = (int) mg_websocket_read(pweb, (char *) buffer + offs, 2);
+         offs += 2;
+         if (n == 0) {
+            return n;
+         }
+         payload_length = (((unsigned char) buffer[2]) * 0x100) + ((unsigned char) buffer[3]);
+      }
+      else if (payload_length == 127) {
+         n = (int) mg_websocket_read(pweb, (char *) buffer + offs, 8);
+         offs += 8;
+         if (n == 0) {
+            return n;
+         }
+         payload_length = 0;
+#if defined(_WIN64)
+         payload_length += (((unsigned char) buffer[2]) * 0x100000000000000);
+         payload_length += (((unsigned char) buffer[3]) * 0x1000000000000);
+         payload_length += (((unsigned char) buffer[4]) * 0x10000000000);
+         payload_length += (((unsigned char) buffer[5]) * 0x100000000);
+#endif
+         payload_length += (((unsigned char) buffer[6]) * 0x1000000);
+         payload_length += (((unsigned char) buffer[7]) * 0x10000);
+         payload_length += (((unsigned char) buffer[8]) * 0x100);
+         payload_length += (((unsigned char) buffer[9]));
+      }
+
+      pweb->pwsock->remaining_length = (size_t) payload_length;
+   }
+
+   if ((pweb->pwsock->remaining_length + (offs + 1)) < bufsiz)
+      get = pweb->pwsock->remaining_length;
+   else
+      get = (bufsiz - (offs + 1));
+
+   if (get > 0) {
+      n = (int) mg_websocket_read(pweb, (char *) buffer + offs, (int) get);
+      pweb->pwsock->remaining_length -= n;
+   }
+   else {
+      n = 0;
+      pweb->pwsock->remaining_length = 0;
+   }
+
+   return (n + offs);
+}
+
+
+size_t mg_websocket_read(MGWEB *pweb, char *buffer, size_t bufsiz)
+{
+   int rc;
+   size_t bytes_read;
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+
+   bytes_read = 0;
+   while (bytes_read < bufsiz) {
+      rc = (int) pwebnginx->r->connection->recv(pwebnginx->r->connection, (u_char *) (buffer + bytes_read), bufsiz - bytes_read);
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: websocket rc=%d;", (int) rc);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web recv", 0);
+}
+*/
+      if (rc == NGX_AGAIN) {
+         mg_sleep(100);
+         continue;
+      }
+
+      if (rc < 1) {
+         bytes_read = 0;
+         break;
+      }
+      bytes_read += rc;
+   }
+
+   return bytes_read;
+}
+
+
+size_t mg_websocket_queue_block(MGWEB *pweb, int type, unsigned char *buffer, size_t buffer_size, short locked)
+{
+   size_t written;
+
+   written = 0;
+
+   if (!pweb->pwsock) {
+      return 0;
+   }
+
+   if (type == MG_WS_MESSAGE_TYPE_CLOSE) {
+      if (pweb->pwsock->status == MG_WEBSOCKET_CLOSED) {
+         goto mg_websocket_queue_block_exit;
+      }
+      else {
+         pweb->pwsock->status = MG_WEBSOCKET_CLOSED;
+      }
+   }
+
+   written = mg_websocket_write_block(pweb, type, buffer, buffer_size);
+
+mg_websocket_queue_block_exit:
+
+   if (!locked) {
+      mg_websocket_unlock(pweb);
+   }
+
+   return written;
+}
+
+
+size_t mg_websocket_write_block(MGWEB *pweb, int type, unsigned char *buffer, size_t buffer_size)
+{
+   unsigned char header[32];
+   size_t pos, written;
+   mg_uint64_t payload_length;
+
+   pos = 0;
+   written = 0;
+   payload_length = (mg_uint64_t) ((buffer != NULL) ? buffer_size : 0);
+
+   if (!pweb->pwsock->closing) {
+
+      pos = mg_websocket_create_header(pweb, type, header, payload_length);
+
+      mg_websocket_write(pweb, (char *) header, (int) pos); /* Header */
+
+      if (payload_length > 0) {
+         if (mg_websocket_write(pweb, (char *) buffer, (int) buffer_size) > 0) { /* Payload Data */
+            written = buffer_size;
+         }
+      }
+   }
+
+   return written;
+}
+
+
+int mg_websocket_write(MGWEB *pweb, char *buffer, int len)
+{
+   int rc, bytes_sent;
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+
+   rc = 0;
+   bytes_sent = 0;
+   while (bytes_sent < len) {
+      rc = (int) pwebnginx->r->connection->send(pwebnginx->r->connection, (u_char *) (buffer + bytes_sent), len - bytes_sent);
+
+      if (rc < 1) {
+         bytes_sent = 0;
+         break;
+      }
+      bytes_sent += rc;
+   }
+
+   return bytes_sent;
+}
+
+
+int mg_websocket_exit(MGWEB *pweb)
+{
+   return CACHE_SUCCESS;
 }
 
