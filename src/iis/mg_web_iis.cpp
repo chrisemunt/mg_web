@@ -33,8 +33,10 @@
 #include <httpserv.h>
 #include <stdio.h>
 #include <time.h>
+#include <Iiswebsocket.h>
 
 #include "mg_web.h"
+#include "mg_websocket.h"
 
 #define MGWEB_RQ_NOTIFICATION_CONTINUE       1
 #define MGWEB_RQ_NOTIFICATION_PENDING        2
@@ -47,19 +49,24 @@ extern "C" {
 #endif
 
 typedef struct tagMGWEBIIS {
-   void *         phttp_context;
-   void *         pprovider;
-   void *         phttp_response;
-   void *         phttp_request;
-   HTTP_REQUEST * phttp_rawrequest;
-   PCSTR          rbuffer;
-   int            exit_code;
+   IHttpContext *       phttp_context;
+   IHttpContext3 *      phttp_context3;
+   IHttpEventProvider * pprovider;
+   IHttpResponse *      phttp_response;
+   IHttpRequest *       phttp_request;
+   IHttpServer *        phttp_server;
+   HTTP_REQUEST *       phttp_rawrequest;
+   IWebSocketContext *  pwebsocket_context;
+   DBXMUTEX             wsmutex;
+   PCSTR                rbuffer;
+   int                  exit_code;
 } MGWEBIIS, *LPWEBIIS;
 
 #ifdef __cplusplus
 }
 #endif
 
+IHttpServer * phttp_server = NULL;
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
 {
@@ -105,6 +112,11 @@ public:
       pwebiis->pprovider = pProvider;
       pwebiis->phttp_response = pHttpResponse;
       pwebiis->phttp_request = pHttpRequest;
+
+      pwebiis->phttp_server = phttp_server;
+      pwebiis->phttp_context3 = NULL;
+      pwebiis->pwebsocket_context = NULL;
+
       pwebiis->phttp_rawrequest = pHttpRequest->GetRawHttpRequest();
 
       pwebiis->rbuffer = (PCSTR) pHttpContext->AllocateRequestMemory(RBUFFER_SIZE);
@@ -220,6 +232,8 @@ HRESULT __declspec(dllexport) RegisterModule(DWORD dwServerVersion, IHttpModuleR
 {
    UNREFERENCED_PARAMETER(dwServerVersion);
    UNREFERENCED_PARAMETER(pGlobalInfo);
+
+   phttp_server = pGlobalInfo;
 
    /* Set the request notifications and exit. */
    return pModuleInfo->SetRequestNotifications(new mg_web_iis_factory, RQ_EXECUTE_REQUEST_HANDLER, 0);
@@ -393,12 +407,9 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 int mg_client_read(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
 {
-   short phase;
    int result, total;
    HRESULT hr;
 	DWORD bytes_received, byte_count;
-
-   phase = 0;
 
 #ifdef _WIN32
 __try {
@@ -407,61 +418,49 @@ __try {
    result = 0;
    total = 0;
    for (;;) {
+
       bytes_received = (buffer_size - total);
 	   /* Retrieve the byte count for the request. */
       byte_count = ((IHttpRequest *) ((MGWEBIIS *) pweb->pweb_server)->phttp_request)->GetRemainingEntityBytes();
-
-      phase = 1;
-
 	   /* Retrieve the request body. */
       hr = ((IHttpRequest *) ((MGWEBIIS *) pweb->pweb_server)->phttp_request)->ReadEntityBody((void *) (pbuffer + total), bytes_received, false, &bytes_received, NULL);
       /* Test for an error. */
 /*
       {
          char buffer[256];
-         sprintf_s(buffer, 255, "hr=%d; buffer_size=%d; bytes_received=%d; total=%d; FAILED(hr)=%d;", hr, buffer_size, bytes_received, total, FAILED(hr));
+         sprintf_s(buffer, 255, "hr=%d; buffer_size=%d; byte_count=%d; bytes_received=%d; total=%d; FAILED(hr)=%d;", hr, buffer_size, byte_count, bytes_received, total, FAILED(hr));
          mg_log_event(pweb->plog, pweb, buffer, "mg_client_read", 0);
       }
 */
+      if (FAILED(hr)) {
+         break;
+      }
+
       if (bytes_received > 0) {
          total += bytes_received;
       }
       if (total >= buffer_size) {
          break;
       }
-      if (FAILED(hr)) {
-         break;
-      }
-
    }
 
-   phase = 2;
-
    if (FAILED(hr)) {
-
-      phase = 3;
-
       /* End of data is okay. */
       if (ERROR_HANDLE_EOF != (hr & 0x0000FFFF)) {
-         phase = 4;
 		   /* Set the error status. */
          ((IHttpEventProvider *) ((MGWEBIIS *) pweb->pweb_server)->pprovider)->SetErrorStatus(hr);
          /* End additional processing. */
          ((MGWEBIIS *) pweb->pweb_server)->exit_code = MGWEB_RQ_NOTIFICATION_FINISH_REQUEST;
-         bytes_received = 0;
          result = -1;
 		}
       else { /* End of data */
          result = 0;
       }
 	}
-	else if (bytes_received > 0) {
-      phase = 5;
+	else if (total > 0) {
       pbuffer[total] = '\0';
       result = (int) total;
 	}
-
-   phase = 9;
 
    return result;
 
@@ -474,7 +473,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(buffer, 255, "Exception caught in f:mg_read_client: %x:%d", code, phase);
+      sprintf_s(buffer, 255, "Exception caught in f:mg_read_client: %x", code);
       mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
@@ -636,7 +635,6 @@ __try {
    ((IHttpResponse *) ((MGWEBIIS *) pweb->pweb_server)->phttp_response)->ClearHeaders();
 
    phase = 1;
-
    pa = pweb->response_headers;
 
    for (n = 0; ;n ++) {
@@ -716,3 +714,317 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 }
 
+
+int mg_websocket_init(MGWEB *pweb)
+{
+   int rc;
+   HRESULT hr;
+   USHORT status_code;
+   USHORT sub_status;
+   DWORD cbsent;
+   BOOL completion_expected;
+   char buffer[256];
+   IHttpServer * phttp_server;
+   IHttpContext * phttp_context;
+   IHttpContext3 * phttp_context3;
+   IHttpResponse * phttp_response;
+   MGWEBIIS * pwebiis;
+
+#ifdef _WIN32
+__try {
+#endif
+
+   pwebiis = (MGWEBIIS *) pweb->pweb_server;
+
+   rc = 0;
+   completion_expected = false;
+   phttp_server = (IHttpServer *) pwebiis->phttp_server;
+   phttp_context = (IHttpContext *) pwebiis->phttp_context;
+   phttp_response = (IHttpResponse *) pwebiis->phttp_response;
+
+   hr = HttpGetExtendedInterface(phttp_server, phttp_context, &phttp_context3);
+
+   if (FAILED(hr)) {
+      mg_log_event(pweb->plog, pweb, "HttpGetExtendedInterface failed", "mg_web: websocket error", 0);
+      return CACHE_FAILURE;
+   }
+
+   status_code = 101;
+   sub_status = 0;
+   strcpy_s(buffer, 255, "Switching Protocols");
+   hr = phttp_response->SetStatus(status_code, (PCSTR) buffer, sub_status, S_OK);
+
+   cbsent = 0;
+   hr = phttp_response->Flush(false, true, &cbsent, &completion_expected);
+
+   pwebiis->pwebsocket_context = (IWebSocketContext *) phttp_context3->GetNamedContextContainer()->GetNamedContext((LPCWSTR) L"websockets");
+
+   if (pwebiis->pwebsocket_context == NULL) {
+      mg_log_event(pweb->plog, pweb, "WebSocket context failed", "mg_web: websocket error", 0);
+      return CACHE_FAILURE;
+   }
+   else {
+      phttp_context3->EnableFullDuplex();
+      rc = CACHE_SUCCESS;
+   }
+   pweb->pwsock->status = MG_WEBSOCKET_HEADERS_SENT;
+
+   return rc;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER ) {
+
+   DWORD code;
+   char buffer[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(buffer, 255, "Exception caught in f:mg_websocket_init: %x", code);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER ) {
+      ;
+   }
+
+   return 0;
+}
+#endif
+}
+
+
+int mg_websocket_create_lock(MGWEB *pweb)
+{
+   MGWEBIIS *pwebiis;
+
+   pwebiis = (MGWEBIIS *) pweb->pweb_server;
+   mg_mutex_create(&(pwebiis->wsmutex));
+
+   return 0;
+}
+
+
+int mg_websocket_destroy_lock(MGWEB *pweb)
+{
+   MGWEBIIS *pwebiis;
+
+   pwebiis = (MGWEBIIS *) pweb->pweb_server;
+   mg_mutex_destroy(&(pwebiis->wsmutex));
+
+   return 0;
+}
+
+
+int mg_websocket_lock(MGWEB *pweb)
+{
+   int rc;
+   MGWEBIIS *pwebiis;
+
+   pwebiis = (MGWEBIIS *) pweb->pweb_server;
+   rc = mg_mutex_lock(&(pwebiis->wsmutex), 0);
+
+   return rc;
+}
+
+
+int mg_websocket_unlock(MGWEB *pweb)
+{
+   int rc;
+   MGWEBIIS *pwebiis;
+
+   pwebiis = (MGWEBIIS *) pweb->pweb_server;
+   rc = mg_mutex_unlock(&(pwebiis->wsmutex));
+
+   return rc;
+}
+
+
+int mg_websocket_frame_init(MGWEB *pweb)
+{
+   if (pweb->pwsock) {
+      return CACHE_SUCCESS;
+   }
+   else {
+      return CACHE_FAILURE;
+   }
+}
+
+
+int mg_websocket_frame_read(MGWEB *pweb, MGWSRSTATE *pread_state)
+{
+   pweb->pwsock->block_size = mg_websocket_read_block(pweb, (char *) pweb->pwsock->block, sizeof(pweb->pwsock->block));
+
+   if (pweb->pwsock->block_size < 1) {
+      pread_state->framing_state = MG_WS_DATA_FRAMING_CLOSE;
+      pread_state->status_code = MG_WS_STATUS_CODE_PROTOCOL_ERROR;
+      return -1;
+   }
+
+   mg_websocket_incoming_frame(pweb, pread_state, (char *) pweb->pwsock->block, pweb->pwsock->block_size);
+
+   return 0;
+}
+
+
+int mg_websocket_frame_exit(MGWEB *pweb)
+{
+   return 0;
+}
+
+
+size_t mg_websocket_read_block(MGWEB *pweb, char *buffer, size_t bufsiz)
+{
+   int n, offs;
+   size_t get;
+   long long payload_length;
+
+   offs = 0;
+   payload_length = 0;
+
+   if (pweb->pwsock->remaining_length == 0) {
+      n = (int) mg_websocket_read(pweb, (char *) buffer, 6);
+      offs = 6;
+
+      if (n == 0) {
+         return n;
+      }
+      payload_length = (long long) MG_WS_FRAME_GET_PAYLOAD_LEN((unsigned char) buffer[1]);
+      if (payload_length == 126) {
+         n = (int) mg_websocket_read(pweb, (char *) buffer + offs, 2);
+         offs += 2;
+         if (n == 0) {
+            return n;
+         }
+         payload_length = (((unsigned char) buffer[2]) * 0x100) + ((unsigned char) buffer[3]);
+
+      }
+      else if (payload_length == 127) {
+         n = (int) mg_websocket_read(pweb, (char *) buffer + offs, 8);
+         offs += 8;
+         if (n == 0) {
+            return n;
+         }
+         payload_length = 0;
+#if defined(_WIN64)
+         payload_length += (((unsigned char) buffer[2]) * 0x100000000000000);
+         payload_length += (((unsigned char) buffer[3]) * 0x1000000000000);
+         payload_length += (((unsigned char) buffer[4]) * 0x10000000000);
+         payload_length += (((unsigned char) buffer[5]) * 0x100000000);
+#endif
+         payload_length += (((unsigned char) buffer[6]) * 0x1000000);
+         payload_length += (((unsigned char) buffer[7]) * 0x10000);
+         payload_length += (((unsigned char) buffer[8]) * 0x100);
+         payload_length += (((unsigned char) buffer[9]));
+      }
+
+      pweb->pwsock->remaining_length = (size_t) payload_length;
+   }
+
+   if ((pweb->pwsock->remaining_length + (offs + 1)) < bufsiz)
+      get = pweb->pwsock->remaining_length;
+   else
+      get = (bufsiz - (offs + 1));
+
+   if (get > 0) {
+      n = (int) mg_websocket_read(pweb, (char *) buffer + offs, (int) get);
+      pweb->pwsock->remaining_length -= n;
+   }
+   else {
+      n = 0;
+      pweb->pwsock->remaining_length = 0;
+   }
+
+   return (n + offs);
+}
+
+
+size_t mg_websocket_read(MGWEB *pweb, char *buffer, size_t bufsiz)
+{
+   size_t bytes_read;
+
+   bytes_read = (size_t) mg_client_read(pweb, (unsigned char *) buffer, (int) bufsiz);
+
+   return bytes_read;
+}
+
+
+size_t mg_websocket_queue_block(MGWEB *pweb, int type, unsigned char *buffer, size_t buffer_size, short locked)
+{
+   size_t written;
+
+   written = 0;
+
+   if (!pweb->pwsock) {
+      return 0;
+   }
+
+   if (type == MG_WS_MESSAGE_TYPE_CLOSE) {
+      if (pweb->pwsock->status == MG_WEBSOCKET_CLOSED) {
+         goto mg_websocket_queue_block_exit;
+      }
+      else {
+         pweb->pwsock->status = MG_WEBSOCKET_CLOSED;
+      }
+   }
+
+   written = mg_websocket_write_block(pweb, type, buffer, buffer_size);
+
+mg_websocket_queue_block_exit:
+
+   if (!locked) {
+      mg_websocket_unlock(pweb);
+   }
+
+   return written;
+}
+
+
+size_t mg_websocket_write_block(MGWEB *pweb, int type, unsigned char *buffer, size_t buffer_size)
+{
+   unsigned char header[32];
+   size_t pos, written;
+   mg_uint64_t payload_length;
+
+   pos = 0;
+   written = 0;
+   payload_length = (mg_uint64_t) ((buffer != NULL) ? buffer_size : 0);
+
+   if (!pweb->pwsock->closing) {
+
+      pos = mg_websocket_create_header(pweb, type, header, payload_length);
+
+      mg_websocket_write(pweb, (char *) header, (int) pos); /* Header */
+
+      if (payload_length > 0) {
+         if (mg_websocket_write(pweb, (char *) buffer, (int) buffer_size) > 0) { /* Payload Data */
+            written = buffer_size;
+         }
+      }
+   }
+
+   return written;
+}
+
+
+
+int mg_websocket_write(MGWEB *pweb, char *buffer, int len)
+{
+   int rc;
+
+   rc = mg_client_write(pweb, (unsigned char *) buffer, (int) len);
+   return rc;
+}
+
+
+int mg_websocket_exit(MGWEB *pweb)
+{
+   MGWEBIIS *pwebiis;
+
+   pwebiis = (MGWEBIIS *) pweb->pweb_server;
+
+   if (pwebiis->pwebsocket_context) {
+      pwebiis->pwebsocket_context->CloseTcpConnection();
+   }
+
+   return CACHE_SUCCESS;
+}
