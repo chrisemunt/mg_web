@@ -45,12 +45,13 @@ a0 d vers q
  ; v3.3.10:   7 July      2020 (Improve web protocol for mg_web)
  ; v3.3.11:   3 August    2020 (Fix the stop^%zmgsi() facility. Fix a UNIX connectivity issue)
  ; v3.4.12:  10 August    2020 (Introduce streamed write for mg_web; export the data-types for the SQL interface)
+ ; v3.5.13:  29 August    2020 (Introduce ASCII streamed write for mg_web; Introduce websocket support; reset ISC namespace after each web request)
  ;
 v() ; version and date
  n v,r,d
- s v="3.4"
- s r=12
- s d="10 August 2020"
+ s v="3.5"
+ s r=13
+ s d="29 August 2020"
  q v_"."_r_"."_d
  ;
 vers ; version information
@@ -1356,6 +1357,7 @@ seterror(v) ; set error
  q
  ;
 getuci() ; get namespace/uci
+ n %uci
  new $ztrap set $ztrap="zgoto "_$zlevel_":getucie^%zmgsis"
  s %uci=$zg
  q %uci
@@ -1588,7 +1590,7 @@ dbxmeth(%r,meth) ; Execute function
  q res
  ;
 dbxweb(ctx,data,param) ; mg_web function invocation
- n %r,%cgi,%var,%sys,offset,ok,sort,type,item,no,res,len
+ n %r,%cgi,%var,%sys,offset,ok,sort,type,item,no,res,len,uci
  new $ztrap set $ztrap="zgoto "_$zlevel_":dbxwebe^%zmgsis"
  s no=0
  s offset=1,ok=1 f %r=1:1 s len=$$dsize256($e(data,offset,offset+3)) d  i 'ok s %r=%r-1 q
@@ -1603,10 +1605,15 @@ dbxweb(ctx,data,param) ; mg_web function invocation
  . q
  s %sys("no")=$$dsize256($g(%sys("no")))
  s no=$g(%sys("no"))+0
+ i $g(%sys("wsfunction"))'="" q $$mgwebsock(.%cgi,.%var,.%sys)
  i $g(%sys("function"))="" q $$esize256(no)_$c(0)_$$mgweb(.%cgi,.%var,.%sys)
+ s uci=$$getuci()
  s res=$$dbxweb1(.%cgi,.%var,.%sys)
  i '$g(%sys("stream")) q $$esize256(no)_$c(0)_res
- s len=$l(res) i len d writex(res,len)
+ s len=$l(res) i len d
+ . i $g(%sys("stream"))=1 d writex(res,len) q
+ . w res
+ . q
  d streamx(.%sys)
  q $c(255,255,255,255)
 dbxwebe ; Error
@@ -1614,11 +1621,13 @@ dbxwebe ; Error
  d event(res)
  i '$g(%sys("stream")) q $$esize256($g(no)+0)_$c(0)_res
  ; with streamed output we must halt and close connection
- d writex(res,$l(res)),streamx(.%sys) w $c(255,255,255,255) d flush
+ i $g(%sys("stream"))=1 d writex(res,$l(res))
+ i $g(%sys("stream"))=2 w res
+ d streamx(.%sys) w $c(255,255,255,255) d flush
  h
  ;
 dbxweb1(%cgi,%var,%sys)
- n %r,offset,ok,x,sort,type,item,ctx,fun,len,name,value,request,data,param,no
+ n (%cgi,%var,%sys)
  q @("$$"_%sys("function")_"(.%cgi,.%var,.%sys)")
  ;
 mgweb(%cgi,%var,%sys)
@@ -1630,15 +1639,40 @@ mgweb(%cgi,%var,%sys)
  s content=content_"</html>"_$c(13,10)
  q (header_content)
  ;
-stream(%sys) ; set up device for streaming the response
+mgwebsock(%cgi,%var,%sys)
+ n (%cgi,%var,%sys)
+ new $ztrap set $ztrap="zgoto "_$zlevel_":mgwebsocke^%zmgsis"
+ s @("res="_"$$"_%sys("wsfunction")_"(.%cgi,.%var,.%sys)")
+ d flush^%zmgsis
+ h
+mgwebsocke ; Error
+ s res="HTTP/2 200 OK"_$c(13,10)_"Error: "_$$error()_$c(13,10,13,10)
+ w $$esize256^%zmgsis($l(res)+5)_$c(0)_$$esize256^%zmgsis(($g(%sys("no"))+0))_$c(0)_res d flush^%zmgsis
+ h
+ ;
+websocket(%sys,binary,options)
+ n res
+ s res="HTTP/2 200 OK"_$c(13,10)_"Binary: "_($g(binary)+0)_$c(13,10,13,10)
+ w $$esize256^%zmgsis($l(res)+5)_$c(0)_$$esize256^%zmgsis(($g(%sys("no"))+0))_$c(0)_res d flush^%zmgsis
+ q ""
+ ;
+stream(%sys) ; set up device for streaming the response (block/binary protocol)
  n %stream
  s %stream=""
  s %sys("stream")=1
  w $c(0,0,0,0,0)_$$esize256(($g(%sys("no"))+0))_$c(1) d flush
  q %stream
  ;
+streamascii(%sys) ; set up device for streaming the response (ASCII protocol)
+ n %stream
+ s %stream=""
+ s %sys("stream")=2
+ w $c(0,0,0,0,0)_$$esize256(($g(%sys("no"))+0))_$c(2) d flush
+ q %stream
+ ;
 streamx(%sys)
  d flush
+ i $g(%sys("stream"))=2 q
  q
  ;
 write(%stream,content) ; write out response payload
@@ -1658,6 +1692,7 @@ writex(content,len) ; write out response payload
  ;
 w(%stream,content) ; write out response payload
  d write(.%stream,content)
+ q
  ;
 nvpair(%nv,%payload)
  n i,x,name,value
