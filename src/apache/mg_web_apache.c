@@ -41,7 +41,15 @@
 #include "http_connection.h"
 #include "apr_strings.h"
 
+#include "apr_thread_cond.h"
+#include "apr_queue.h"
+
+#include "apr_base64.h"
+#include "apr_sha1.h"
+#include "util_ebcdic.h"
+
 #include "mg_web.h"
+#include "mg_websocket.h"
 
 #define MG_MAGIC_TYPE1        "application/x-mgweb"
 #define MG_MAGIC_TYPE2        "text/mgweb"
@@ -84,6 +92,22 @@ typedef struct tagMGWEBAPACHE {
    apr_size_t           read_data_offset;
    unsigned long        read_total;
    apr_bucket_brigade * write_bucket_brigade;
+
+   /* Websocket support */
+   apr_bucket_brigade * obb;
+   apr_bucket_brigade * ibb;
+   ap_filter_t *        of;
+   apr_thread_mutex_t * wsmutex;
+   apr_array_header_t * protocols;
+   apr_os_thread_t      main_thread;
+   apr_thread_cond_t *  write_cond;
+   apr_queue_t *        queue;
+   apr_pollset_t *      pollset;
+   apr_pollfd_t         pollfd;
+   apr_int32_t          pollcnt;
+   apr_pollfd_t *       signaled;
+   apr_status_t         rv;
+
 } MGWEBAPACHE, *LPWEBAPACHE;
 
 
@@ -98,25 +122,31 @@ typedef struct tagMGWEBTABLE {
 #endif
 
 /*
- * Declare ourselves so the configuration routines can find and know us.
- * We'll fill it in at the end of the module.
+   Declare ourselves so the configuration routines can find and know us.
+   We'll fill it in at the end of the module.
  */
 
 module AP_MODULE_DECLARE_DATA mg_web_module;
 
 
-static int           mg_handler              (request_rec *r);
-static const char *  mg_cmd                  (cmd_parms *cmd, void *dconf, const char *args);
-static int           mg_init                 (apr_pool_t *pPool, apr_pool_t *pLog, apr_pool_t *pTemp, server_rec *s);
-static void          mg_child_init           (apr_pool_t *p, server_rec *s);
-static apr_status_t  mg_child_exit           (void *data);
-static void *        mg_create_dir_conf      (apr_pool_t *p, char *dirspec);
-static void *        mg_merge_dir_conf       (apr_pool_t *p, void *parent_conf, void *newloc_conf);
-static void *        mg_create_server_conf   (apr_pool_t *p, server_rec *s);
-static void *        mg_merge_server_conf    (apr_pool_t *p, void *server1_conf, void *server2_conf);
-static void          mg_register_hooks       (apr_pool_t *p);
-int                  mg_check_file_type      (MGWEBAPACHE *pwebapache, char *type);
-int                  mg_parse_table          (void *rec, const char *key, const char *value);
+static int           mg_handler                    (request_rec *r);
+static const char *  mg_cmd                        (cmd_parms *cmd, void *dconf, const char *args);
+static int           mg_init                       (apr_pool_t *pPool, apr_pool_t *pLog, apr_pool_t *pTemp, server_rec *s);
+static void          mg_child_init                 (apr_pool_t *p, server_rec *s);
+static apr_status_t  mg_child_exit                 (void *data);
+static void *        mg_create_dir_conf            (apr_pool_t *p, char *dirspec);
+static void *        mg_merge_dir_conf             (apr_pool_t *p, void *parent_conf, void *newloc_conf);
+static void *        mg_create_server_conf         (apr_pool_t *p, server_rec *s);
+static void *        mg_merge_server_conf          (apr_pool_t *p, void *server1_conf, void *server2_conf);
+static void          mg_register_hooks             (apr_pool_t *p);
+int                  mg_check_file_type            (MGWEBAPACHE *pwebapache, char *type);
+int                  mg_parse_table                (void *rec, const char *key, const char *value);
+
+static void          mg_websocket_handshake        (MGWEBAPACHE *pwebapache, const char *key);
+static void          mg_websocket_parse_protocol   (MGWEBAPACHE *pwebapache, const char *sec_websocket_protocol);
+static size_t        mg_websocket_protocol_count   (MGWEBAPACHE *pwebapache);
+static const char *  mg_websocket_protocol_index   (MGWEBAPACHE *pwebapache, const size_t index);
+static void          mg_websocket_protocol_set     (MGWEBAPACHE *pwebapache, const char *protocol);
 
 
 #if defined(_WIN32)
@@ -1256,3 +1286,486 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 }
 
+
+static void mg_websocket_handshake(MGWEBAPACHE *pwebapache, const char *key)
+{
+   apr_byte_t response[32];
+   apr_byte_t digest[APR_SHA1_DIGESTSIZE];
+   apr_sha1_ctx_t context;
+   int len;
+
+   apr_sha1_init(&context);
+   apr_sha1_update(&context, key, (int) strlen(key));
+   apr_sha1_update(&context, MG_WS_WEBSOCKET_GUID, MG_WS_WEBSOCKET_GUID_LEN);
+   apr_sha1_final(digest, &context);
+
+   len = apr_base64_encode_binary((char *)response, digest, sizeof(digest));
+   response[len] = '\0';
+
+   apr_table_setn(pwebapache->r->headers_out, "Sec-WebSocket-Accept", apr_pstrdup(pwebapache->r->pool, (const char *)response));
+   return;
+}
+
+
+static void mg_websocket_parse_protocol(MGWEBAPACHE *pwebapache, const char *sec_websocket_protocol)
+{
+   apr_array_header_t *protocols = apr_array_make(pwebapache->r->pool, 1, sizeof(char *));
+   char *protocol_state = NULL;
+   char *protocol = apr_strtok(apr_pstrdup(pwebapache->r->pool, sec_websocket_protocol), ", \t", &protocol_state);
+
+   while (protocol != NULL) {
+      APR_ARRAY_PUSH(protocols, char *) = protocol;
+      protocol = apr_strtok(NULL, ", \t", &protocol_state);
+   }
+   if (!apr_is_empty_array(protocols)) {
+      pwebapache->protocols = protocols;
+   }
+   return;
+}
+
+
+static size_t mg_websocket_protocol_count(MGWEBAPACHE *pwebapache)
+{
+   size_t count = 0;
+
+   if ((pwebapache != NULL) && (pwebapache->protocols != NULL) && !apr_is_empty_array(pwebapache->protocols)) {
+      count = (size_t) pwebapache->protocols->nelts;
+   }
+   return count;
+}
+
+
+static const char * mg_websocket_protocol_index(MGWEBAPACHE *pwebapache, const size_t index)
+{
+   if (index < mg_websocket_protocol_count(pwebapache)) {
+      return APR_ARRAY_IDX(pwebapache->protocols, index, char *);
+   }
+   return NULL;
+}
+
+
+static void mg_websocket_protocol_set(MGWEBAPACHE *pwebapache, const char *protocol)
+{
+   if ((pwebapache != NULL) && (protocol != NULL)) {
+
+      if (pwebapache->r != NULL) {
+         apr_table_setn(pwebapache->r->headers_out, "Sec-WebSocket-Protocol", apr_pstrdup(pwebapache->r->pool, protocol));
+      }
+   }
+   return;
+}
+
+
+int mg_websocket_init(MGWEB *pweb)
+{
+   ap_filter_t *input_filter;
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+
+   pwebapache->obb = NULL;
+   pwebapache->wsmutex = NULL;
+   pwebapache->protocols = NULL;
+   pwebapache->main_thread = apr_os_thread_current();
+   pwebapache->write_cond = NULL;
+   pwebapache->pollset = NULL;
+   pwebapache->queue = NULL;
+
+   /* Remove the HTTP input filter. */
+   for (input_filter = pwebapache->r->input_filters; input_filter != NULL; input_filter = input_filter->next) {
+      if ((input_filter->frec != NULL) && (input_filter->frec->name != NULL) && !strcasecmp(input_filter->frec->name, "http_in")) {
+         ap_remove_input_filter(input_filter);
+         break;
+      }
+   }
+
+   /* Remove the reqtimeout input filter. */
+   for (input_filter = pwebapache->r->input_filters; input_filter != NULL; input_filter = input_filter->next) {
+      if ((input_filter->frec != NULL) && (input_filter->frec->name != NULL) && !strcasecmp(input_filter->frec->name, "reqtimeout")) {
+         ap_remove_input_filter(input_filter);
+         break;
+      }
+   }
+
+   pwebapache->r->input_filters = pwebapache->r->connection->input_filters;
+   pwebapache->r->proto_input_filters = pwebapache->r->connection->input_filters;
+
+   apr_table_clear(pwebapache->r->headers_out);
+   apr_table_setn(pwebapache->r->headers_out, "Upgrade", "websocket");
+   apr_table_setn(pwebapache->r->headers_out, "Connection", "Upgrade");
+
+   /* Set the expected acceptance response */
+   mg_websocket_handshake(pwebapache, pweb->pwsock->sec_websocket_key);
+
+   /* Handle the WebSocket protocol */
+   if (pweb->pwsock->sec_websocket_protocol[0] != '\0') {
+      /* Parse the WebSocket protocol entry */
+      mg_websocket_parse_protocol(pwebapache, pweb->pwsock->sec_websocket_protocol);
+
+      if (mg_websocket_protocol_count(pwebapache) > 0) {
+         /*
+            Default to using the first protocol in the list
+         */
+         mg_websocket_protocol_set(pwebapache, mg_websocket_protocol_index(pwebapache, 0));
+      }
+   }
+
+   mg_websocket_create_lock(pweb);
+   apr_thread_cond_create(&(pwebapache->write_cond), pwebapache->r->pool);
+   mg_websocket_lock(pweb);
+
+   /* Now that the connection has been established, disable the socket timeout */
+   apr_socket_timeout_set(ap_get_conn_socket(pwebapache->r->connection), -1);
+
+   /* Set response status code and status line */
+   pwebapache->r->status = HTTP_SWITCHING_PROTOCOLS;
+   pwebapache->r->status_line = ap_get_status_line(pwebapache->r->status);
+
+   /* Send the headers */
+   ap_send_interim_response(pwebapache->r, 1);
+
+   pweb->pwsock->status = MG_WEBSOCKET_HEADERS_SENT;
+
+   return 0;
+}
+
+
+int mg_websocket_create_lock(MGWEB *pweb)
+{
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+   apr_thread_mutex_create(&(pwebapache->wsmutex), APR_THREAD_MUTEX_DEFAULT, pwebapache->r->pool);
+
+   return 0;
+}
+
+
+int mg_websocket_destroy_lock(MGWEB *pweb)
+{
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+   apr_thread_mutex_destroy(pwebapache->wsmutex);
+
+   return 0;
+}
+
+
+int mg_websocket_lock(MGWEB *pweb)
+{
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+   apr_thread_mutex_lock(pwebapache->wsmutex);
+
+   return 0;
+}
+
+
+int mg_websocket_unlock(MGWEB *pweb)
+{
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+   apr_thread_mutex_unlock(pwebapache->wsmutex);
+
+   return 0;
+}
+
+
+
+int mg_websocket_frame_init(MGWEB *pweb)
+{
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+
+   if ((pwebapache->obb = apr_brigade_create(pwebapache->r->pool, pwebapache->r->connection->bucket_alloc)) != NULL &&
+      (pwebapache->ibb = apr_brigade_create(pwebapache->r->pool, pwebapache->r->connection->bucket_alloc)) != NULL &&
+      apr_pollset_create(&(pwebapache->pollset), 1, pwebapache->r->pool, APR_POLLSET_WAKEABLE) == APR_SUCCESS &&
+      apr_queue_create(&(pwebapache->queue), MG_WS_QUEUE_CAPACITY, pwebapache->r->pool) == APR_SUCCESS) {
+
+      memset(&(pwebapache->pollfd), 0, sizeof(pwebapache->pollfd));
+      pwebapache->pollfd.p = pwebapache->r->pool;
+      pwebapache->pollfd.desc_type = APR_POLL_SOCKET;
+      pwebapache->pollfd.reqevents = APR_POLLIN;
+      pwebapache->pollfd.desc.s = ap_get_conn_socket(pwebapache->r->connection);
+      apr_pollset_add(pwebapache->pollset, &(pwebapache->pollfd));
+
+      mg_websocket_unlock(pweb);
+
+      return CACHE_SUCCESS;
+   }
+   else {
+      return CACHE_FAILURE;
+   }
+}
+
+
+int mg_websocket_frame_read(MGWEB *pweb, MGWSRSTATE *pread_state)
+{
+   int timeout, work_done;
+   apr_status_t rv;
+   MGWSMESS *msg;
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+
+   work_done = 0;
+
+   /* check for incoming data from client */
+   pweb->pwsock->block_size = mg_websocket_read_block(pweb, (char *) pweb->pwsock->block, sizeof(pweb->pwsock->block));
+
+   if (pwebapache->rv == APR_SUCCESS) {
+      mg_websocket_incoming_frame(pweb, pread_state, (char *) pweb->pwsock->block, pweb->pwsock->block_size);
+      work_done = 1;
+   }
+   else if (!APR_STATUS_IS_EAGAIN(pwebapache->rv)) {
+      pread_state->framing_state = MG_WS_DATA_FRAMING_CLOSE;
+      pread_state->status_code = MG_WS_STATUS_CODE_PROTOCOL_ERROR;
+      return -1;
+   }
+
+   /* check for outgoing data to client */
+   rv = apr_queue_trypop(pwebapache->queue, (void **) &msg);
+   if (rv == APR_SUCCESS) {
+      mg_websocket_lock(pweb);
+
+      msg->written = mg_websocket_write_block(pweb, (int) msg->type, (unsigned char *) msg->buffer, (size_t) msg->buffer_size);
+      msg->done = 1;
+      apr_thread_cond_signal(pwebapache->write_cond);
+      mg_websocket_unlock(pweb);
+      work_done = 1;
+   }
+   else if (!APR_STATUS_IS_EAGAIN(rv)) {
+      pread_state->framing_state = MG_WS_DATA_FRAMING_CLOSE;
+      pread_state->status_code = MG_WS_STATUS_CODE_INTERNAL_ERROR;
+      return -2;
+   }
+
+   timeout = work_done ? 0 : -1;
+   rv = apr_pollset_poll(pwebapache->pollset, timeout, &(pwebapache->pollcnt), (const apr_pollfd_t **) &(pwebapache->signaled));
+   if (rv != APR_SUCCESS && !APR_STATUS_IS_EINTR(rv) && !APR_STATUS_IS_TIMEUP(rv)) {
+      pread_state->framing_state = MG_WS_DATA_FRAMING_CLOSE;
+      pread_state->status_code = MG_WS_STATUS_CODE_INTERNAL_ERROR;
+      return -3;
+   }
+
+   return CACHE_SUCCESS;
+}
+
+
+int mg_websocket_frame_exit(MGWEB *pweb)
+{
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+
+   /* We are done with the bucket brigades, pollset, and queue */
+   mg_websocket_lock(pweb);
+
+   apr_brigade_destroy(pwebapache->obb);
+   apr_brigade_destroy(pwebapache->ibb);
+   pwebapache->obb = NULL;
+   pwebapache->ibb = NULL;
+
+   apr_pollset_destroy(pwebapache->pollset);
+   pwebapache->pollset = NULL;
+
+   apr_queue_term(pwebapache->queue);
+   pwebapache->queue = NULL;
+
+   return 0;
+}
+
+
+size_t mg_websocket_read_block(MGWEB *pweb, char *buffer, size_t bufsiz)
+{
+   apr_size_t readbufsiz;
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+
+   readbufsiz = 0;
+   if ((pwebapache->rv = ap_get_brigade(pwebapache->r->input_filters, pwebapache->ibb, AP_MODE_READBYTES, APR_NONBLOCK_READ, (apr_size_t) bufsiz)) == APR_SUCCESS) {
+      if ((pwebapache->rv = apr_brigade_flatten(pwebapache->ibb, buffer, (apr_size_t *) &bufsiz)) == APR_SUCCESS) {
+         readbufsiz = (apr_size_t) bufsiz;
+         if (readbufsiz == 0) {
+            /*
+               Some input filters return APR_SUCCESS on a non-blocking read when no data are available.
+               This is not ideal behavior, but we must account for it by changing the status to APR_EAGAIN.
+            */
+            pwebapache->rv = APR_EAGAIN;
+         }
+      }
+      apr_brigade_cleanup(pwebapache->ibb);
+   }
+/*
+   if (readbufsiz > 0) {
+      char bufferx[256];
+      sprintf(bufferx, "WEBSOCKET READ len=%d;", readbufsiz);
+      mg_log_buffer(pweb->plog, pweb, buffer, readbufsiz, bufferx, 0);
+   }
+*/
+   return (size_t) readbufsiz;
+}
+
+
+size_t mg_websocket_read(MGWEB *pweb, char *buffer, size_t bufsiz)
+{
+   return 0;
+}
+
+
+size_t mg_websocket_queue_block(MGWEB *pweb, int type, unsigned char *buffer, size_t buffer_size, short locked)
+{
+   apr_status_t rv;
+   size_t written;
+   MGWSMESS msg = { type, buffer, buffer_size, 0, 0 };
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+   written = 0;
+
+   if (!pweb->pwsock) {
+      return 0;
+   }
+
+   if (!locked) {
+      mg_websocket_lock(pweb);
+   }
+   if (type == MG_WS_MESSAGE_TYPE_CLOSE) {
+      if (pweb->pwsock->status == MG_WEBSOCKET_CLOSED) {
+         goto mg_websocket_queue_block_exit;
+      }
+      else {
+         pweb->pwsock->status = MG_WEBSOCKET_CLOSED;
+      }
+   }
+
+   if (apr_os_thread_equal(apr_os_thread_current(), pwebapache->main_thread)) {
+      /* This is the main thread. It's safe to write messages directly. */
+      written = mg_websocket_write_block(pweb, type, buffer, buffer_size);
+   }
+   else if (pwebapache->pollset && pwebapache->queue && !pweb->pwsock->closing) {
+      /* Dispatch this message to the main thread. */
+      msg.type = type;
+      msg.buffer = buffer;
+      msg.buffer_size = buffer_size;
+      msg.written = 0;
+      msg.done = 0;
+      rv = apr_queue_push(pwebapache->queue, &msg);
+      if (rv != APR_SUCCESS) {
+         goto mg_websocket_queue_block_exit;
+      }
+      apr_pollset_wakeup(pwebapache->pollset);
+
+      while (pwebapache->pollset && pwebapache->queue && !msg.done && !pweb->pwsock->closing) {
+         apr_thread_cond_wait(pwebapache->write_cond, pwebapache->wsmutex);
+      }
+
+      if (msg.done) {
+         written = msg.written;
+      }
+   }
+
+mg_websocket_queue_block_exit:
+
+   if (!locked) {
+      mg_websocket_unlock(pweb);
+   }
+
+   return written;
+}
+
+
+size_t mg_websocket_write_block(MGWEB *pweb, int type, unsigned char *buffer, size_t buffer_size)
+{
+   unsigned char header[32];
+   size_t pos, written;
+   mg_uint64_t payload_length;
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+
+   pos = 0;
+   written = 0;
+   payload_length = (mg_uint64_t) ((buffer != NULL) ? buffer_size : 0);
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "websocket netx_tcp_read payload_length=%llu; pos=%d; obb=%p; pweb->pwsock->closing=%d", payload_length, pos, pwebapache->obb, pweb->pwsock->closing);
+   mg_log_buffer(pweb->plog, pweb, header, pos, bufferx, 0);
+}
+*/
+
+   if ((pwebapache->r != NULL) && (pwebapache->obb != NULL) && !pweb->pwsock->closing) {
+      pwebapache->of = pwebapache->r->connection->output_filters;
+
+      pos = mg_websocket_create_header(pweb, type, header, payload_length);
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "websocket netx_tcp_read payload_length=%llu; pos=%d", payload_length, pos);
+   mg_log_buffer(pweb->plog, pweb, header, pos, bufferx, 0);
+}
+*/
+      mg_websocket_write(pweb, (char *) header, (int) pos); /* Header */
+
+      if (payload_length > 0) {
+         if (mg_websocket_write(pweb, (char *) buffer, (int) buffer_size) > 0) { /* Payload Data */
+            written = buffer_size;
+         }
+      }
+
+      if (ap_fflush(pwebapache->of, pwebapache->obb) != APR_SUCCESS) {
+         written = 0;
+      }
+   }
+
+   return written;
+}
+
+
+int mg_websocket_write(MGWEB *pweb, char *buffer, int len)
+{
+   int rc;
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+
+/*
+   {
+      char bufferx[256];
+      sprintf(bufferx, "WEBSOCKET WRITE len=%d;", len);
+      mg_log_buffer(pweb->plog, pweb, buffer, len, bufferx, 0);
+   }
+*/
+
+   if (ap_fwrite(pwebapache->of, pwebapache->obb, (const char *) buffer, (apr_size_t) len) == APR_SUCCESS) { /* Payload Data */
+      rc = len;
+   }
+
+   return rc;
+}
+
+
+int mg_websocket_exit(MGWEB *pweb)
+{
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+
+   mg_websocket_unlock(pweb);
+
+   pwebapache->r->connection->keepalive = AP_CONN_CLOSE;
+
+   /* Close the connection */
+   ap_lingering_close(pwebapache->r->connection);
+
+   apr_thread_cond_destroy(pwebapache->write_cond);
+   mg_websocket_destroy_lock(pweb);
+
+   return 0;
+}
