@@ -29,14 +29,14 @@
 #ifndef MG_WEBSYS_H
 #define MG_WEBSYS_H
 
-#define MAJORVERSION             1
-#define MINORVERSION             1
-#define MAINTVERSION             4
+#define MAJORVERSION             2
+#define MINORVERSION             0
+#define MAINTVERSION             7
 #define BUILDNUMBER              0
 
 #define DBX_VERSION_MAJOR        "2"
 #define DBX_VERSION_MINOR        "0"
-#define DBX_VERSION_BUILD        "6"
+#define DBX_VERSION_BUILD        "7"
 
 #define DBX_VERSION              DBX_VERSION_MAJOR "." DBX_VERSION_MINOR "." DBX_VERSION_BUILD
 #define DBX_COMPANYNAME          "M/Gateway Developments Ltd\0"

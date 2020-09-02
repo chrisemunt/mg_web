@@ -113,17 +113,30 @@ int mg_websocket_check(MGWEB *pweb)
    len = 120;
    rc = mg_get_cgi_variable(pweb, "SERVER_NAME", host, &len);
    host[120] = '\0';
+   if (rc == CACHE_SUCCESS) {
+      host[len] = '\0';
+   }
+
    len = 250;
    rc = mg_get_cgi_variable(pweb, "HTTP_SEC_WEBSOCKET_KEY", sec_websocket_key, &len);
    sec_websocket_key[250] = '\0';
+   if (rc == CACHE_SUCCESS) {
+      sec_websocket_key[len] = '\0';
+   }
+
    len = 30;
    rc = mg_get_cgi_variable(pweb, "HTTP_SEC_WEBSOCKET_PROTOCOL", sec_websocket_protocol, &len);
    sec_websocket_protocol[30] = '\0';
+   if (rc == CACHE_SUCCESS) {
+      sec_websocket_protocol[len] = '\0';
+   }
 
    len = 30;
    rc = mg_get_cgi_variable(pweb, "HTTP_SEC_WEBSOCKET_VERSION", buffer, &len);
    buffer[30] = '\0';
-
+   if (rc == CACHE_SUCCESS) {
+      buffer[len] = '\0';
+   }
    protocol_version = (int) strtol((char *) buffer, NULL, 10);
 
    lenu = 0;
@@ -175,37 +188,6 @@ int mg_websocket_check(MGWEB *pweb)
 
       rc = mg_websocket_init(pweb);
 
-      if (pweb->pwsock->status) {
-         goto mg_websocket_check_success;
-      }
-
-      pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_alloc - 1000);
-
-      strcpy(token, sec_websocket_key);
-      strcpy(token, MG_WS_WEBSOCKET_GUID);
-
-      mg_sha1((unsigned char *) hash, (const unsigned char *) token, (unsigned long) strlen(token));
-      hash[20] = '\0';
-
-      n = mg_b64_encode(hash, sec_websocket_accept, 20, 0);
-      sec_websocket_accept[n] = '\0';
-
-      strcpy(pweb->response_headers, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ");
-      strcat(pweb->response_headers, sec_websocket_accept);
-      strcat(pweb->response_headers, "\r\n");
-      if (sec_websocket_protocol[0]) {
-         strcat(pweb->response_headers, "Sec-WebSocket-Protocol: ");
-         strcat(pweb->response_headers, sec_websocket_protocol);
-         strcat(pweb->response_headers, "\r\n");
-      }
-      strcat(pweb->response_headers, "\r\n");
-      pweb->response_headers_len = (int) strlen(pweb->response_headers);
-
-      mg_submit_headers(pweb);
-      pweb->pwsock->status = MG_WEBSOCKET_HEADERS_SENT;
-
-mg_websocket_check_success:
-
       sprintf(buffer, "ws=%d", protocol_version);
       len = (int) strlen(buffer);
       p = (char *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used + 5);
@@ -221,9 +203,6 @@ mg_websocket_check_success:
       pweb->input_buf.len_used += (len + 5);
 
    }
-else
-      mg_log_event(pweb->plog, pweb, "bad ws", "mg_web: websocket information", 0);
-
 
    return upgrade_connection;
 }
@@ -769,352 +748,4 @@ size_t mg_websocket_create_header(MGWEB *pweb, int type, unsigned char *header, 
 
    return pos;
 }
-
-
-char mg_b64_ntc(unsigned char n)
-{
-   if (n < 26)
-      return 'A' + n;
-   if (n < 52)
-      return 'a' - 26 + n;
-
-   if (n < 62)
-      return '0' - 52 + n;
-   if (n == 62)
-      return '+';
-
-   return '/';
-}
-
-
-unsigned char mg_b64_ctn(char c)
-{
-
-   if (c == '/')
-      return 63;
-   if (c == '+')
-      return 62;
-   if ((c >= 'A') && (c <= 'Z'))
-      return c - 'A';
-   if ((c >= 'a') && (c <= 'z'))
-      return c - 'a' + 26;
-   if ((c >= '0') && (c <= '9'))
-      return c - '0' + 52;
-   if (c == '=')
-      return 80;
-   return 100;
-}
-
-
-int mg_b64_encode(char *from, char *to, int length, int quads)
-{
-/*
-   3 8bit numbers become four characters
-*/
-
-   int i = 0;
-   char *tot = to;
-   int qc = 0; /* Quadcount */
-   unsigned char c;
-   unsigned char d;
-
-   while (i < length) {
-      c = from[i];
-      *to++ = (char) mg_b64_ntc((unsigned char) (c / 4));
-      c = c * 64;
-     
-      i++;
-
-      if (i >= length) {
-         *to++ = mg_b64_ntc((unsigned char) (c / 4));
-         *to++ = '=';
-         *to++ = '=';
-         break;
-      }
-      d = from[i];
-      *to++ = mg_b64_ntc((unsigned char) (c / 4 + d / 16));
-      d = d * 16;
-
-      i++;
-
-
-      if (i >= length) {
-         *to++ = mg_b64_ntc((unsigned char) (d / 4));
-         *to++ = '=';
-         break;
-      }
-      c = from[i];
-      *to++ = mg_b64_ntc((unsigned char) (d / 4 + c / 64));
-      c=c * 4;
-
-      i++;
-
-      *to++ = mg_b64_ntc((unsigned char) (c / 4));
-
-      qc ++; /* qz will never be zero, quads = 0 means no linebreaks */
-      if (qc == quads) {
-         *to++ = '\n';
-         qc = 0;
-      }
-   }
-
-/*
-   if ((quads != 0) && (qc != 0))
-      *to ++ = '\n';
-*/
-
-/* Insert last linebreak */
-
-   return ((int) (to - tot));
-}
-
-
-int mg_b64_decode(char *from, char *to, int length)
-{
-   unsigned char c, d, e, f;
-   char A, B, C;
-   int i;
-   int add;
-   char *tot = to;
-
-   for (i = 0; i + 3 < length;) {
-      add = 0;
-      A = B = C = 0;
-      c = d = e = f = 100;
-
-      while ((c == 100) && (i < length))
-         c = mg_b64_ctn(from[i++]);
-      while ((d == 100) && (i < length))
-         d = mg_b64_ctn(from[i++]);
-      while ((e == 100) && (i < length))
-         e = mg_b64_ctn(from[i++]);
-      while ((f == 100) && (i < length))
-         f = mg_b64_ctn(from[i++]);
-
-      if (f == 100)
-         return -1; /* Not valid end */
-
-      if (c < 64) {
-         A += c * 4;
-         if (d < 64) {
-            A += d / 16;
-
-            B += d * 16;
-
-            if (e < 64) {
-               B += e / 4;
-               C += e * 64;
-
-               if (f < 64) {
-                  C += f;
-                  to[2] = C;
-                  add += 1;
-
-               }
-               to[1] = B;
-               add += 1;
-
-            }
-            to[0] = A;
-            add += 1;
-         }
-      }
-      to += add;
-
-      if (f == 80)
-         return ((int) (to - tot)); /* end because '=' encountered */
-   }
-   return ((int) (to - tot));
-}
-
-
-int mg_b64_get_ebuffer_size(int l, int q)
-{
-   int ret;
-
-   ret = (l / 3) * 4;
-   if (l % 3 != 0)
-      ret += 4;
-   if (q != 0) {
-      ret += (ret / (q * 4));
-
-/* if (ret % (q / 4) != 0)
-      ret ++;
-*/
-
-/* Add space for trailing \n */
-   }
-   return ret;
-}
-
-
-int mg_b64_strip_ebuffer(char *buf, int length)
-{
-   int i;
-   int ret = 0;
-
-   for (i = 0;i < length;i ++)
-      if (mg_b64_ctn(buf[i]) != 100)
-         buf[ret++] = buf[i];
- 
-   return ret;
-
-}
-
-
-void mg_sha1_compile(sha1_ctx ctx[1])
-{
-   sha1_32t *w = ctx->wbuf;
-
-#ifdef ARRAY
-   sha1_32t    v[5];
-   T_MEMCPY(v, ctx->hash, 5 * sizeof(sha1_32t));
-#else
-   sha1_32t    v0, v1, v2, v3, v4;
-   v0 = ctx->hash[0]; v1 = ctx->hash[1];
-   v2 = ctx->hash[2]; v3 = ctx->hash[3];
-   v4 = ctx->hash[4];
-#endif
-
-#define hf(i)   w[i]
-
-   five_cycle(v, ch, 0x5a827999,  0);
-   five_cycle(v, ch, 0x5a827999,  5);
-   five_cycle(v, ch, 0x5a827999, 10);
-   one_cycle(v,0,1,2,3,4, ch, 0x5a827999, hf(15)); \
-
-#undef  hf
-#define hf(i) (w[(i) & 15] = rotl32(                    \
-                 w[((i) + 13) & 15] ^ w[((i) + 8) & 15] \
-               ^ w[((i) +  2) & 15] ^ w[(i) & 15], 1))
-
-   one_cycle(v,4,0,1,2,3, ch, 0x5a827999, hf(16));
-   one_cycle(v,3,4,0,1,2, ch, 0x5a827999, hf(17));
-   one_cycle(v,2,3,4,0,1, ch, 0x5a827999, hf(18));
-   one_cycle(v,1,2,3,4,0, ch, 0x5a827999, hf(19));
-
-   five_cycle(v, parity, 0x6ed9eba1,  20);
-   five_cycle(v, parity, 0x6ed9eba1,  25);
-   five_cycle(v, parity, 0x6ed9eba1,  30);
-   five_cycle(v, parity, 0x6ed9eba1,  35);
-
-   five_cycle(v, maj, 0x8f1bbcdc,  40);
-   five_cycle(v, maj, 0x8f1bbcdc,  45);
-   five_cycle(v, maj, 0x8f1bbcdc,  50);
-   five_cycle(v, maj, 0x8f1bbcdc,  55);
-
-   five_cycle(v, parity, 0xca62c1d6,  60);
-   five_cycle(v, parity, 0xca62c1d6,  65);
-   five_cycle(v, parity, 0xca62c1d6,  70);
-   five_cycle(v, parity, 0xca62c1d6,  75);
-
-#ifdef ARRAY
-   ctx->hash[0] += v[0]; ctx->hash[1] += v[1];
-   ctx->hash[2] += v[2]; ctx->hash[3] += v[3];
-   ctx->hash[4] += v[4];
-#else
-   ctx->hash[0] += v0; ctx->hash[1] += v1;
-   ctx->hash[2] += v2; ctx->hash[3] += v3;
-   ctx->hash[4] += v4;
-#endif
-}
-
-
-
-void mg_sha1_begin(sha1_ctx ctx[1])
-{
-   ctx->count[0] = ctx->count[1] = 0;
-   ctx->hash[0] = 0x67452301;
-   ctx->hash[1] = 0xefcdab89;
-   ctx->hash[2] = 0x98badcfe;
-   ctx->hash[3] = 0x10325476;
-   ctx->hash[4] = 0xc3d2e1f0;
-}
-
-
-
-/* SHA1 hash data in an array of bytes into hash buffer and */
-/* call the hash_compile function as required.              */
-
-void mg_sha1_hash(const unsigned char data[], unsigned long len, sha1_ctx ctx[1])
-{
-   sha1_32t pos = (sha1_32t)(ctx->count[0] & SHA1_MASK), space = SHA1_BLOCK_SIZE - pos;
-   const unsigned char *sp = data;
-
-   if ((ctx->count[0] += len) < len)
-      ++(ctx->count[1]);
-
-   /* transfer whole blocks if possible  */
-   while (len >= space) {
-      memcpy(((unsigned char*)ctx->wbuf) + pos, sp, space);
-      sp += space; len -= space; space = SHA1_BLOCK_SIZE; pos = 0;
-      bsw_32(ctx->wbuf, SHA1_BLOCK_SIZE >> 2);
-      mg_sha1_compile(ctx);
-   }
-
-   memcpy(((unsigned char*)ctx->wbuf) + pos, sp, len);
-}
-
-
-/* SHA1 final padding and digest calculation  */
-
-void mg_sha1_end(unsigned char hval[], sha1_ctx ctx[1])
-{
-   sha1_32t i = (sha1_32t)(ctx->count[0] & SHA1_MASK);
-
-   /* put bytes in the buffer in an order in which references to   */
-   /* 32-bit words will put bytes with lower addresses into the    */
-   /* top of 32 bit words on BOTH big and little endian machines   */
-   bsw_32(ctx->wbuf, (i + 3) >> 2);
-
-   /* we now need to mask valid bytes and add the padding which is */
-   /* a single 1 bit and as many zero bits as necessary. Note that */
-   /* we can always add the first padding byte here because the    */
-   /* buffer always has at least one empty slot                    */
-   ctx->wbuf[i >> 2] &= 0xffffff80 << 8 * (~i & 3);
-   ctx->wbuf[i >> 2] |= 0x00000080 << 8 * (~i & 3);
-
-   /* we need 9 or more empty positions, one for the padding byte  */
-   /* (above) and eight for the length count. If there is not      */
-   /* enough space, pad and empty the buffer                       */
-   if (i > SHA1_BLOCK_SIZE - 9) {
-      if (i < 60)
-         ctx->wbuf[15] = 0;
-      mg_sha1_compile(ctx);
-      i = 0;
-   }
-   else    /* compute a word index for the empty buffer positions  */
-      i = (i >> 2) + 1;
-
-   while (i < 14) /* and zero pad all but last two positions        */
-      ctx->wbuf[i++] = 0;
-
-   /* the following 32-bit length fields are assembled in the      */
-   /* wrong byte order on little endian machines but this is       */
-   /* corrected later since they are only ever used as 32-bit      */
-   /* word values.                                                 */
-   ctx->wbuf[14] = (ctx->count[1] << 3) | (ctx->count[0] >> 29);
-   ctx->wbuf[15] = ctx->count[0] << 3;
-   mg_sha1_compile(ctx);
-
-   /* extract the hash value as bytes in case the hash buffer is   */
-   /* misaligned for 32-bit words                                  */
-   for(i = 0; i < SHA1_DIGEST_SIZE; ++i)
-      hval[i] = (unsigned char)(ctx->hash[i >> 2] >> (8 * (~i & 3)));
-
-   return;
-}
-
-
-
-void mg_sha1(unsigned char hval[], const unsigned char data[], unsigned long len)
-{
-   sha1_ctx cx[1];
-
-   mg_sha1_begin(cx);
-   mg_sha1_hash(data, len, cx);
-   mg_sha1_end(hval, cx);
-   return;
-}
-
 
