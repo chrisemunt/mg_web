@@ -31,6 +31,8 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <ngx_crypt.h>
+#include <ngx_sha1.h>
 #include <nginx.h>
 
 #if !defined(_WIN32)
@@ -146,6 +148,8 @@ int                  mg_check_file_type         (char *mg_file_types_main, char 
 void *               mg_malloc_nginx            (void *pweb_server, unsigned long size);
 void *               mg_remalloc_nginx          (void *pweb_server, void *p, unsigned long size);
 int                  mg_free_nginx              (void *pweb_server, void *p);
+int                  mg_websocket_accept_key    (MGWEB *pweb, char * sec_websocket_accept);
+
 
 
 #if defined(MG_API_TRACE)
@@ -1603,26 +1607,56 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
-int mg_websocket_init(MGWEB *pweb)
+int mg_websocket_accept_key(MGWEB *pweb, char * sec_websocket_accept)
 {
-   int n, len;
-   char *pbuffer;
-   char token[256], hash[256], sec_websocket_accept[256], header[2048];
-   ngx_buf_t *b;
-   ngx_chain_t out;
+   ngx_str_t encoded, decoded;
+   ngx_sha1_t sha1;
+   u_char digest[20];
+   char token[256];
    MGWEBNGINX *pwebnginx;
 
    pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
 
+   decoded.len = sizeof(digest);
+   decoded.data = digest;
+
    strcpy(token, pweb->pwsock->sec_websocket_key);
    strcat(token, MG_WS_WEBSOCKET_GUID);
 
-   mg_sha1((unsigned char *) hash, (const unsigned char *) token, (int) strlen(token));
-   hash[20] = '\0';
+   ngx_sha1_init(&sha1);
+/*
+   ngx_sha1_update(&sha1, (const void *) pweb->pwsock->sec_websocket_key, (size_t) strlen(pweb->pwsock->sec_websocket_key));
+   ngx_sha1_update(&sha1, (const void *) MG_WS_WEBSOCKET_GUID, (size_t) MG_WS_WEBSOCKET_GUID_LEN);
+*/
+   ngx_sha1_update(&sha1, (const void *) token, (size_t) strlen(token));
+   ngx_sha1_final(digest, &sha1);
 
-   n = mg_b64_encode(hash, sec_websocket_accept, 20, 0);
+   encoded.len = ngx_base64_encoded_length(decoded.len) + 1;
+   encoded.data = ngx_pnalloc(pwebnginx->r->pool, encoded.len);
+   ngx_memzero(encoded.data, encoded.len);
+   if (encoded.data == NULL) {
+       return CACHE_FAILURE;
+   }
 
-   sec_websocket_accept[n] = '\0';
+   ngx_encode_base64(&encoded, &decoded);
+
+   strncpy(sec_websocket_accept, (char *) encoded.data, (int) encoded.len);
+   sec_websocket_accept[encoded.len] = '\0';
+
+   return CACHE_SUCCESS;
+}
+
+
+int mg_websocket_init(MGWEB *pweb)
+{
+   int len;
+   char *pbuffer;
+   char sec_websocket_accept[256], header[2048];
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+
+   mg_websocket_accept_key(pweb, sec_websocket_accept);
 
    strcpy(header, "");
    strcat(header, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ");
@@ -1635,7 +1669,12 @@ int mg_websocket_init(MGWEB *pweb)
    }
    strcat(header, "\r\n");
 
+   pwebnginx->r->main->count ++; /* prevent nginx close connection after upgrade */
+   pwebnginx->r->keepalive = 0;
+
    pwebnginx->r->headers_out.status = NGX_HTTP_SWITCHING_PROTOCOLS;
+   pwebnginx->r->headers_out.status_line.data = (u_char *) "101 Switching Protocols";
+   pwebnginx->r->headers_out.status_line.len = sizeof("101 Switching Protocols") - 1;
 
    len = (int) strlen(header);
    pbuffer = ngx_pcalloc(pwebnginx->r->pool, 4096);
@@ -1647,35 +1686,16 @@ int mg_websocket_init(MGWEB *pweb)
    mg_log_buffer(pweb->plog, pweb, header, len, bufferx, 0);
 }
 */
-   b = ngx_pcalloc(pwebnginx->r->pool, sizeof(ngx_buf_t));
-   if (b == NULL) {
-      ngx_log_error(NGX_LOG_ERR, pwebnginx->r->connection->log, 0, "Failed to allocate WebSocket response buffer");
-      return CACHE_FAILURE;
-   }
 
-   b->pos = (u_char *) pbuffer; /* first position in memory of the data */
-   b->last = (u_char *) (pbuffer + len); /* last position */
+   pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_alloc - 1000);
+   strcpy(pweb->response_headers, header);
+   pweb->response_headers_len = len;
+   mg_submit_headers(pweb);
 
-   b->memory = 1; /* content is in read-only memory */
-   /* (i.e., filters should copy it rather than rewrite in place) */
-
-   b->last_buf = 1; /* there will be no more buffers in the request */
-
-   /* Now the module attaches it to the chain link: */
-
-   out.buf = b;
-   out.next = NULL;
-
-   ngx_http_output_filter(pwebnginx->r, &out);
+   ngx_http_send_special(pwebnginx->r, NGX_HTTP_FLUSH);
 
    pweb->pwsock->status = MG_WEBSOCKET_HEADERS_SENT;
-/*
-{
-   char bufferx[256];
-   sprintf(bufferx, "debug: websocket startup netx_tcp_read len=%d; pweb->pwsock->status=%d;", len, pweb->pwsock->status);
-   mg_log_buffer(pweb->plog, pweb, header, len, bufferx, 0);
-}
-*/
+
    return CACHE_SUCCESS;
 }
 
@@ -1760,6 +1780,7 @@ int mg_websocket_frame_read(MGWEB *pweb, MGWSRSTATE *pread_state)
    mg_log_event(pweb->plog, pweb, bufferx, "mg_web", 0);
 }
 */
+
    if (pweb->pwsock->block_size < 1) {
       pread_state->framing_state = MG_WS_DATA_FRAMING_CLOSE;
       pread_state->status_code = MG_WS_STATUS_CODE_PROTOCOL_ERROR;
@@ -1798,13 +1819,7 @@ size_t mg_websocket_read_block(MGWEB *pweb, char *buffer, size_t bufsiz)
 
       n = (int) mg_websocket_read(pweb, (char *) buffer, 6);
       offs = 6;
-/*
-{
-   char bufferx[256];
-   sprintf(bufferx, "debug: websocket mg_websocket_read=%d;", (int) n);
-   mg_log_event(pweb->plog, pweb, bufferx, "mg_web READ FROM  WS", 0);
-}
-*/
+
       if (n == 0) {
          return n;
       }
@@ -1865,16 +1880,22 @@ size_t mg_websocket_read(MGWEB *pweb, char *buffer, size_t bufsiz)
 
    pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
 
+   /* TODO: make this work asynchronously */
+
    bytes_read = 0;
    while (bytes_read < bufsiz) {
+/*
       rc = (int) pwebnginx->r->connection->recv(pwebnginx->r->connection, (u_char *) (buffer + bytes_read), bufsiz - bytes_read);
+*/
+      rc = ngx_recv(pwebnginx->r->connection, (u_char *) (buffer + bytes_read), bufsiz - bytes_read);
 /*
 {
    char bufferx[256];
-   sprintf(bufferx, "debug: websocket rc=%d;", (int) rc);
+   sprintf(bufferx, "debug: websocket rc=%d; NGX_AGAIN=%d", (int) rc, (int) NGX_AGAIN);
    mg_log_event(pweb->plog, pweb, bufferx, "mg_web recv", 0);
 }
 */
+
       if (rc == NGX_AGAIN) {
          mg_sleep(100);
          continue;
@@ -1959,7 +1980,10 @@ int mg_websocket_write(MGWEB *pweb, char *buffer, int len)
    rc = 0;
    bytes_sent = 0;
    while (bytes_sent < len) {
+/*
       rc = (int) pwebnginx->r->connection->send(pwebnginx->r->connection, (u_char *) (buffer + bytes_sent), len - bytes_sent);
+*/
+      rc = ngx_send(pwebnginx->r->connection, (u_char *) (buffer + bytes_sent), len - bytes_sent);
 
       if (rc < 1) {
          bytes_sent = 0;
