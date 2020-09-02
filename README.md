@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-29 August 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+2 September 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.0; Revision 6.
+* Current Release: Version: 2.0; Revision 7.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -145,4 +145,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Introduce a "stream ASCII" mode.  This mode will enable both InterSystems DB Servers and YottaDB to return web response content using the embedded DB Server **write** commands.
 * Reset the UCI/Namespace after completing each web request (and before re-using the same DB server process for processing the next web request). 
 * Insert a default HTTP response header (Content-type: text/html) if the application doesn't return one.
+
+### v2.0.7 (2 September 2020)
+
+* Correct a fault in WebSocket connectivity for Nginx under UNIX.
 
