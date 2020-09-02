@@ -57,6 +57,15 @@
 #define MG_DEFAULT_TIMEOUT    300000
 #define MG_RBUFFER_SIZE       1024
 
+#define MG_WS_QUEUE_CAPACITY  16 /* capacity of queue used for communication between main thread and other threads */
+
+#if !defined(APR_ARRAY_IDX)
+#define APR_ARRAY_IDX(ary,i,type) (((type *)(ary)->elts)[i])
+#endif
+#if !defined(APR_ARRAY_PUSH)
+#define APR_ARRAY_PUSH(ary,type) (*((type *)apr_array_push(ary)))
+#endif
+
 
 #ifdef __cplusplus
 extern "C" {
