@@ -46,12 +46,13 @@ a0 d vers q
  ; v3.3.11:   3 August    2020 (Fix the stop^%zmgsi() facility. Fix a UNIX connectivity issue)
  ; v3.4.12:  10 August    2020 (Introduce streamed write for mg_web; export the data-types for the SQL interface)
  ; v3.5.13:  29 August    2020 (Introduce ASCII streamed write for mg_web; Introduce websocket support; reset ISC namespace after each web request)
+ ; v3.5.14:  24 September 2020 (Add a getdatetime() function)
  ;
 v() ; version and date
  n v,r,d
  s v="3.5"
- s r=13
- s d="29 August 2020"
+ s r=14
+ s d="24 September 2020"
  q v_"."_r_"."_d
  ;
 vers ; version information
@@ -129,6 +130,11 @@ getmslx() ; Get maximum string length the hard way
  s x="" f max=1:1 s x=x_"a"
 getmslxe ; max string error
  q (max-1)
+ ;
+getdatetime(h) ; Get the date and time in text form
+ n dt
+ s dt=$zd(h)_" "_$$dtime($p(h,",",2),1)
+ q dt
  ;
 vars ; public  system variables
  ;
@@ -603,15 +609,20 @@ ddate(date) ; decode m date
 ddatee ; no $zd function
  q date
  ;
-dtime(time) ; decode m time
- q (time\3600)_":"_(time#3600\60)
+dtime(mtime,format) ; decode m time
+ n h,m,s
+ i mtime="" q ""
+ i mtime["," s mtime=$p(mtime,",",2)
+ i format=0 q (mtime\3600)_":"_(mtime#3600\60)
+ s h=mtime\3600,s=mtime-(h*3600),m=s\60,s=s#60
+ q $s(h<10:"0",1:"")_h_":"_$s(m<10:"0",1:"")_m_":"_$s(s<10:"0",1:"")_s
  ;
 head() ; format header record
  n %uci
  new $ztrap set $ztrap="zgoto "_$zlevel_":heade^%zmgsis"
  s %uci=$$getuci()
 heade ; error
- q $$ddate(+$h)_" at "_$$dtime($p($h,",",2))_"~"_$g(%zcs("port"))_"~"_%uci
+ q $$ddate(+$h)_" at "_$$dtime($p($h,",",2),0)_"~"_$g(%zcs("port"))_"~"_%uci
  ;
 hmacsha256(string,key,b64,context) ; hmac-sha256
  q $$crypt("127.0.0.1",$s(context:80,1:7040),"hmac-sha256",string,key,b64,context)
@@ -1695,8 +1706,13 @@ w(%stream,content) ; write out response payload
  q
  ;
 nvpair(%nv,%payload)
- n i,x,name,value
- f i=1:1:$l(%payload,"&") s x=$p(%payload,"&",i),name=$$urld($p(x,"=",1)),value=$$urld($p(x,"=",2)) i name'="" s %nv(name)=value
+ n i,x,def,name,value,value1
+ f i=1:1:$l(%payload,"&") s x=$p(%payload,"&",i),name=$$urld($p(x,"=",1)),value=$$urld($p(x,"=",2)) i name'="" d
+ . s def=$d(%nv(name))
+ . i 'def s %nv(name)=value q
+ . i def#10 s value1=$g(%nv(name)) k %nv(name) s %nv(name,1)=value1,%nv(name,2)=value q
+ . s %nv(name,$o(%nv(name,""),-1)+1)=value q
+ . q
  q 1
  ;
 urld(%val) ; URL decode (unescape)
