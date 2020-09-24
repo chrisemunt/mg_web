@@ -14,6 +14,10 @@ Chris Munt <cmunt@mgateway.com>
 
 A longer read on the rationale behind **mg\_web** can be found [here](./why_mg_web.md).  This document was prepared with my colleague Rob Tweed.  Rob has many years' experience in creating and using web application development frameworks.
 
+Full documentation for installing and configuring **mg\_web** can be found [here](https://github.com/chrisemunt/mg_web/blob/master/doc/mg_web.pdf).
+
+If you are familiar with **WebLink**, **WebLink Developer** or **EWD** then [this document](./mg_web_weblink_config.md) will help you get started with **mg\_web** and will explain how existing applications created with those technologies can be run through **mg\_web**.  Thanks are due to Rob Tweed and Mike Clayton for designing this interface.
+
 ## Technical Summary
 
 HTTP requests passed to the DB Server via **mg\_web** are processed by a simple function of the form:
