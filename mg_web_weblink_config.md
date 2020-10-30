@@ -157,6 +157,10 @@ Paste the code below into it:
         weblink(%CGIEVAR,%KEY)
            new (%CGIEVAR,%KEY)
            ;
+           ; Intercept Event Broker calls (XMLHTTP calls fired from mgwx.js)
+           ; 
+           if $data(%KEY("MGWreq")) do eventbroker(.%CGIEVAR,.%KEY) QUIT
+           ;
            ; Intercept URL paths for WebLink Developer Applications
            ;
            if $data(%KEY("wlapp")) do ^%wld QUIT
@@ -170,7 +174,25 @@ Paste the code below into it:
            do ^%ZMGW2
            QUIT
            ;
-
+        eventbroker(%CGIEVAR,%KEY)
+           set %REQUEST(0)=0 if $data(%KEY("MGWmod")) set %REQUEST(0)=%KEY("MGWmod")
+           set req=$get(%KEY("MGWreq"))
+           set %KEY("MGWreq")=$piece(req,"^",1,3),req=$piece(req,"^",4,9999)
+           set %REQUEST(-1)=%KEY("MGWreq")
+           set %REQUEST=$piece(req,"(",1),req=$piece(req,"(",2,9999),req=$extract(req,1,$length(req)-1)
+           for i=1:1:$length(req,$char(1)) set %REQUEST(i)=$piece(req,$char(1),i)
+           do HTTPA^%mgwj
+           do eventbroker1(.%CGIEVAR,.%KEY,.%REQUEST)
+           do END^%mgwj
+           do HTTPZ^%mgwj
+           QUIT
+           ;
+        eventbroker1(%CGIEVAR,%KEY,%REQUEST)
+           new (%CGIEVAR,%KEY,%REQUEST)
+           if %REQUEST["wlapp." do ^%wldja QUIT
+           do JAVA^%ZMGW2
+           QUIT
+           ;
 
 Save and compile this ObjectScript routine.
 

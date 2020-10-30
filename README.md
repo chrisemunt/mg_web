@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-2 September 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+30 October 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.0; Revision 7.
+* Current Release: Version: 2.0; Revision 8.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -157,4 +157,12 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.0.7 (2 September 2020)
 
 * Correct a fault in WebSocket connectivity for Nginx under UNIX.
+
+### v2.0.8 (30 October 2020)
+
+* Introduce a configuration parameter ('**chunking**') to control the level at which HTTP chunked transfer is used. Chunking can be completely disabled ('chunking off'), or set to only be used if the response payload exceeds a certain size (e.g. 'chunking 250KB').
+* Introduce the ability to define custom HTML pages to be returned on **mg\_web** error conditions.  Custom pages (specified as full URLs) can be defined for the following error conditions.
+ * DB Server unavailable (parameter: **custompage\_dbserver\_unavailable**)
+ * DB Server busy (parameter: **custompage\_dbserver\_busy**).
+ * DB Server disabled (parameter: **custompage\_dbserver\_disabled**)
 
