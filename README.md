@@ -162,7 +162,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 * Introduce a configuration parameter ('**chunking**') to control the level at which HTTP chunked transfer is used. Chunking can be completely disabled ('chunking off'), or set to only be used if the response payload exceeds a certain size (e.g. 'chunking 250KB').
 * Introduce the ability to define custom HTML pages to be returned on **mg\_web** error conditions.  Custom pages (specified as full URLs) can be defined for the following error conditions.
- * DB Server unavailable (parameter: **custompage\_dbserver\_unavailable**)
- * DB Server busy (parameter: **custompage\_dbserver\_busy**).
- * DB Server disabled (parameter: **custompage\_dbserver\_disabled**)
+	* DB Server unavailable (parameter: **custompage\_dbserver\_unavailable**)
+	* DB Server busy (parameter: **custompage\_dbserver\_busy**).
+	* DB Server disabled (parameter: **custompage\_dbserver\_disabled**)
 
