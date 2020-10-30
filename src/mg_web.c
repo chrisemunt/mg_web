@@ -51,6 +51,14 @@ Version 2.0.6 29 August 2020:
    Introduce stream ASCII mode.
    Reset the UCI/Namespace after completing each web request (and before re-using the same DB server process for processing the next web request). 
    Insert a default HTTP response header (Content-type: text/html) if the application doesn't return one.
+
+Version 2.0.7 2 September 2020:
+   Correct a fault in WebSocket connectivity for Nginx under UNIX.
+
+Version 2.0.8 30 October 2020:
+   Introduce a configuration parameter ('chunking') to control the level at which HTTP chunked transfer is used. Chunking can be completely disabled ('chunking off'), or set to only be used if the response payload exceeds a certain size (e.g. 'chunking 250KB').
+   Introduce the ability to define custom HTML pages (specified as full URLs) to be returned on mg_web error conditions. parameters: custompage_dbserver_unavailable, custompage_dbserver_busy, custompage_dbserver_disabled
+
 */
 
 
@@ -63,7 +71,7 @@ Version 2.0.6 29 August 2020:
 extern int errno;
 #endif
 
-MGSYS                mg_system         = {0, 0, 0, 0, "", "", "", NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, "", ""}};
+MGSYS                mg_system         = {0, 0, 0, 0, 0, "", "", "", NULL, NULL, NULL, NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, "", ""}};
 static NETXSOCK      netx_so           = {0, 0, 0, 0, 0, 0, 0, {'\0'}};
 static DBXCON *      mg_connection     = NULL;
 
@@ -92,6 +100,7 @@ __try {
 #endif
 
    pweb->plog = mg_system.plog;
+   pweb->response_chunked = 0; /* 2.0.8 */
 
    if (!mg_server || !mg_path || mg_system.config_error[0]) {
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
@@ -99,7 +108,7 @@ __try {
          pweb->response_clen = (int) strlen(mg_system.config_error);
          pweb->response_content = mg_system.config_error;
       }
-      mg_web_http_error(pweb, 500);
+      mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
       MG_LOG_RESPONSE_HEADER(pweb);
       mg_submit_headers(pweb);
       if (pweb->response_clen && pweb->response_content) {
@@ -130,7 +139,7 @@ __try {
 
    if (!pweb->ppath || rc == CACHE_FAILURE) {
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
-      mg_web_http_error(pweb, 500);
+      mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
       MG_LOG_RESPONSE_HEADER(pweb);
       mg_submit_headers(pweb);
       mg_log_event(pweb->plog, pweb, "No valid PATH configuration found", "mg_web: error", 0);
@@ -148,7 +157,7 @@ __try {
 
    if (!pweb->psrv) {
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
-      mg_web_http_error(pweb, 500);
+      mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
       MG_LOG_RESPONSE_HEADER(pweb);
       mg_submit_headers(pweb);
       mg_log_event(pweb->plog, pweb, "No valid SERVER configuration found", "mg_web: error", 0);
@@ -231,10 +240,11 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 int mg_web_process(MGWEB *pweb)
 {
-   int rc, len, get, close_connection;
+   int rc, len, get, get1, close_connection;
    unsigned char *p;
    char buffer[256];
    DBXCON *pcon;
+   DBXVAL *pval;
 
 #ifdef _WIN32
 __try {
@@ -267,7 +277,7 @@ __try {
    if (!pcon) {
       mg_log_event(pweb->plog, pweb, "Unable to allocate memory for a new connection", "mg_web: error", 0);
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
-      mg_web_http_error(pweb, 503);
+      mg_web_http_error(pweb, 503, MG_CUSTOMPAGE_DBSERVER_BUSY);
       MG_LOG_RESPONSE_HEADER(pweb);
       mg_submit_headers(pweb);
       return 0;
@@ -280,7 +290,7 @@ __try {
          mg_log_event(pweb->plog, pweb, "Cannot connect to DB Server", "mg_web: connectivity error", 0);
       }
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
-      mg_web_http_error(pweb, 503);
+      mg_web_http_error(pweb, 503, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
 
       MG_LOG_RESPONSE_HEADER(pweb);
       mg_submit_headers(pweb);
@@ -330,15 +340,23 @@ __try {
       strcpy((char *) p, pweb->response_headers);
       pweb->response_headers = (char *) p;
 
-      if (pweb->response_streamed && pweb->response_remaining > 0) {
-         if (pweb->wserver_chunks_response == 0)
-            strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
-         else
-            strcpy(buffer, "\r\n\r\n");
+      mg_parse_headers(pweb);
+
+      if (pweb->response_clen_server >= 0) { /* DB server supplied content length */
+         pweb->wserver_chunks_response = 1; /* Effectively turn off chunking */
+         strcpy(buffer, "\r\n\r\n");
       }
       else {
-         pweb->response_streamed = 0;
-         sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
+         if (pweb->response_streamed && pweb->response_chunked && pweb->response_remaining > 0) {
+            if (pweb->wserver_chunks_response == 0)
+               strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
+            else
+               strcpy(buffer, "\r\n\r\n");
+         }
+         else {
+            pweb->response_streamed = 0;
+            sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
+         }
       }
       strcat(pweb->response_headers, buffer);
       pweb->response_headers_len = (int) strlen(pweb->response_headers);
@@ -357,7 +375,7 @@ __try {
             mg_log_event(&(mg_system.log), pweb, pcon->error, "mg_web: error", 0);
          }
       }
-      mg_web_http_error(pweb, 500);
+      mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
       get = pweb->response_clen;
       pweb->response_remaining = 0;
       close_connection = 1;
@@ -384,7 +402,13 @@ __try {
    if (get) {
       if (pweb->response_streamed) {
          if (pweb->wserver_chunks_response == 0) {
-            sprintf(buffer, "%x\r\n", get);
+            get1 = get;
+            pval = pweb->output_val.pnext;
+            while (pval) { /* 2.0.8 */
+               get1 += (int) pval->svalue.len_used;
+               pval = pval->pnext;
+            }
+            sprintf(buffer, "%x\r\n", get1);
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
@@ -392,10 +416,20 @@ __try {
          }
          MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
          mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
+         pval = pweb->output_val.pnext;
+         while (pval) { /* 2.0.8 */
+            mg_client_write(pweb, (unsigned char *) pval->svalue.buf_addr, (int) pval->svalue.len_used);
+            pval = pval->pnext;
+         }
       }
       else {
          MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
          mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
+         pval = pweb->output_val.pnext;
+         while (pval) { /* 2.0.8 */
+            mg_client_write(pweb, (unsigned char *) pval->svalue.buf_addr, (int) pval->svalue.len_used);
+            pval = pval->pnext;
+         }
       }
    }
 
@@ -471,6 +505,63 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 #endif
 
+}
+
+
+/* 2.0.8 */
+int mg_parse_headers(MGWEB *pweb)
+{
+   int len;
+   char *pn, *ps, *pv, *pz;
+   char head[64];
+
+   pweb->response_clen_server = -1;
+
+   pn = pweb->response_headers;
+   while (pn && *pn) {
+      pz = strstr(pn, "\r\n");
+      if (pz) {
+         *pz = '\0';
+      }
+      ps = strstr(pn, ":");
+      if (ps) {
+         *ps = '\0';
+         pv = ps;
+         len = (int) (pv - pn);
+         if (len > 0 && len < 60) {
+            while (*(++ pv) == ' ')
+               ;
+/*
+            {
+               char bufferx[256];
+               sprintf(bufferx, "Response Header: len=%d; name=%s", len, pn);
+               mg_log_event(pweb->plog, pweb, pv, bufferx, 0);
+            }
+*/
+            strcpy(head, pn);
+            mg_lcase(head);
+            if (strstr(head, "content-length")) {
+               pweb->response_clen_server = (int) strtol(pv, NULL, 10);
+            }
+         }
+         *ps = ':';
+      }
+      if (pz) {
+         *pz = '\r';
+         pn = (pz + 2);
+      }
+      else {
+         pn = NULL;
+      }
+   }
+/*
+   {
+      char bufferx[256];
+      sprintf(bufferx, "Response Header: clen=%d;", pweb->response_clen_server);
+      mg_log_event(pweb->plog, pweb, bufferx, "Content Length from Server", 0);
+   }
+*/
+   return CACHE_SUCCESS;
 }
 
 
@@ -635,13 +726,33 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
-int mg_web_http_error(MGWEB *pweb, int http_status_code)
+int mg_web_http_error(MGWEB *pweb, int http_status_code, int custompage)
 {
+   char *custompage_url;
    char buffer[32];
 
 #ifdef _WIN32
 __try {
 #endif
+
+   custompage_url = NULL;
+   if (custompage > MG_CUSTOMPAGE_DBSERVER_NONE) {
+      if (custompage == MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE && mg_system.custompage_dbserver_unavailable)
+         custompage_url =  mg_system.custompage_dbserver_unavailable;
+      else if (custompage == MG_CUSTOMPAGE_DBSERVER_BUSY && mg_system.custompage_dbserver_busy)
+         custompage_url =  mg_system.custompage_dbserver_busy;
+      else if (custompage == MG_CUSTOMPAGE_DBSERVER_DISABLED && mg_system.custompage_dbserver_disabled)
+         custompage_url =  mg_system.custompage_dbserver_disabled;
+
+      if (custompage_url) {
+         if (pweb->request_method && !strcmp(pweb->request_method, "POST"))
+            sprintf(pweb->response_headers, "HTTP/1.1 301 Moved Permanently\r\nLocation: %s\r\nConnection: close\r\n\r\n", custompage_url);
+         else
+            sprintf(pweb->response_headers, "HTTP/1.1 307 Temporary Redirect\r\nLocation: %s\r\nConnection: close\r\n\r\n", custompage_url);
+         pweb->response_headers_len = (int) strlen(pweb->response_headers);
+         return 0;
+      }
+   }
 
    sprintf(pweb->response_headers, "HTTP/1.1 %d Internal Server Error\r\nConnection: close", http_status_code);
    if (pweb->response_clen) {
@@ -1146,6 +1257,8 @@ MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen)
    pweb->output_val.svalue.buf_addr = pweb->input_buf.buf_addr;
    pweb->output_val.svalue.len_alloc = pweb->input_buf.len_alloc;
    pweb->output_val.svalue.len_used = pweb->input_buf.len_used;
+   pweb->output_val.pnext = NULL;
+   pweb->poutput_val_last = NULL;
 
    pweb->evented = 0;
    pweb->wserver_chunks_response = 0;
@@ -1162,12 +1275,54 @@ MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen)
 }
 
 
+DBXVAL * mg_extend_response_memory(MGWEB *pweb)
+{
+   unsigned int len_alloc;
+   DBXVAL *pval;
+
+   len_alloc = 128000;
+
+   pval = (DBXVAL *) mg_malloc(NULL, sizeof(DBXVAL) + (len_alloc + 32), 0);
+   if (!pval) {
+      return NULL;
+   }
+   memset((void *) pval, 0, sizeof(DBXVAL));
+
+   pval->svalue.buf_addr = ((char *) pval) + sizeof(DBXVAL);
+   pval->svalue.buf_addr += DBX_IBUFFER_OFFSET;
+   pval->svalue.len_alloc = len_alloc;
+   pval->svalue.len_used = 0;
+   pval->pnext = NULL;
+
+   if (pweb->poutput_val_last) {
+      pweb->poutput_val_last->pnext = pval;
+   }
+   else {
+      pweb->output_val.pnext = pval;
+   }
+   pweb->poutput_val_last = pval;
+
+   return pval;
+}
+
+
 int mg_release_request_memory(MGWEB *pweb)
 {
+   DBXVAL *pval, *pvalnext;
+
    if (!pweb) {
       return 0;
    }
+
+   pval = pweb->output_val.pnext;
+   while (pval) {
+      pvalnext = pval->pnext;
+      mg_free(NULL, (void *) pval, 0);
+      pval = pvalnext; 
+   }
+
    mg_free(pweb->pweb_server, pweb, 0);
+
    return 0;
 }
 
@@ -1216,6 +1371,7 @@ __try {
    sprintf(buffer, "configuration: %s", mg_system.config_file);
    mg_log_event(&(mg_system.log), NULL, buffer, "mg_web: worker initialization", 0);
 
+   mg_system.chunking = 1; /* 2.0.8 */
    strncpy(mg_system.cgi_base, DBX_CGI_BASE, 60);
    mg_system.cgi_base[60] = '\0';
    mg_system.cgi_max = 0;
@@ -1586,6 +1742,37 @@ __try {
                         if (strstr(word[n], "w"))
                            mg_system.log.log_transmissions_to_webserver = 1;
                      }
+                  }
+                  else if (!strcmp(word[0], "chunking")) { /* 2.0.8 */
+                     if (wn > 1 && word[1]) {
+                        mg_lcase(word[1]);
+                        if (strstr(word[1], "off")) {
+                           mg_system.chunking = 0;
+                        }
+                        else {
+                           mg_system.chunking = (unsigned long) strtol(word[1], NULL, 10);
+                           if (mg_system.chunking) {
+                              if (strstr(word[1], "k"))
+                                 mg_system.chunking *= 1000;
+                              else if (strstr(word[1], "m"))
+                                 mg_system.chunking *= (1000 * 1000);
+                              else if (strstr(word[1], "g"))
+                                 mg_system.chunking *= (1000 * 1000 * 1000);
+                           }
+                           else { /* invalid value */
+                              mg_system.chunking = 1;
+                           }
+                        }
+                     }
+                  }
+                  else if (!strcmp(word[0], "custompage_dbserver_unavailable") && wn > 1) { /* 2.0.8 */
+                     mg_system.custompage_dbserver_unavailable = word[1];
+                  }
+                  else if (!strcmp(word[0], "custompage_dbserver_busy") && wn > 1) { /* 2.0.8 */
+                     mg_system.custompage_dbserver_busy = word[1];
+                  }
+                  else if (!strcmp(word[0], "custompage_dbserver_disabled") && wn > 1) { /* 2.0.8 */
+                     mg_system.custompage_dbserver_disabled = word[1];
                   }
                   else {
                      sprintf(mg_system.config_error, "Invalid 'global' parameter '%s' on line %d", word[0], ln); 
@@ -5252,73 +5439,99 @@ netx_tcp_command_reconnect:
 int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
 {
    int rc, get, eos;
+   DBXVAL *pval;
 
    rc = CACHE_SUCCESS;
+   pval = &(pweb->output_val);
 
    if (pweb->response_streamed == 2) { /* ASCII stream mode */
 
       pweb->response_remaining = 0;
       memset((void *) pweb->db_chunk_head, 0, sizeof(pweb->db_chunk_head));
 
-      if (pcon->stream_tail_len > 0) {
-         memcpy((void *) (pweb->output_val.svalue.buf_addr + pweb->output_val.svalue.len_used), (void *) pcon->stream_tail, pcon->stream_tail_len);
-         pweb->output_val.svalue.len_used += pcon->stream_tail_len;
-         pcon->stream_tail_len = 0;
-      }
-
-      eos = 0;
-      get = (pweb->output_val.svalue.len_alloc - (pweb->output_val.svalue.len_used + DBX_HEADER_SIZE));
-      while (get) {
-         rc = netx_tcp_read(pcon, (unsigned char *) pweb->output_val.svalue.buf_addr + pweb->output_val.svalue.len_used, get, pcon->timeout, 0);
-/*
-         {
-            char bufferx[256];
-            sprintf(bufferx, "ASCII stream response from DB Server: rc=%d; len_used=%d; get=%d;", rc, pweb->output_val.svalue.len_used, get);
-            mg_log_buffer(pweb->plog, pweb, pweb->output_val.svalue.buf_addr, pweb->output_val.svalue.len_used + (rc > 0 ? rc : 0), bufferx, 0);
-         }
-*/
-         if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
-            break;
-         }
-         else if (rc == 0) {
-            rc = NETX_READ_EOF;
-            break;
+      for (;;) {
+         if (pcon->stream_tail_len > 0) {
+            memcpy((void *) (pval->svalue.buf_addr + pval->svalue.len_used), (void *) pcon->stream_tail, pcon->stream_tail_len);
+            pval->svalue.len_used += pcon->stream_tail_len;
+            pcon->stream_tail_len = 0;
          }
 
-         get -= rc;
-         pweb->output_val.svalue.len_used += rc;
-         pweb->response_size += rc;
+         eos = 0;
+         get = (pval->svalue.len_alloc - (pval->svalue.len_used + DBX_HEADER_SIZE));
+         while (get) {
+            rc = netx_tcp_read(pcon, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, get, pcon->timeout, 0);
 /*
-         {
-            char bufferx[256];
-            sprintf(bufferx, "ASCII stream response from DB Server (last 4 Bytes): len_used=%d; %x %x %x %x;", pweb->output_val.svalue.len_used, (unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 1], (unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 2], (unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 3], (unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 4]);
-            mg_log_buffer(pweb->plog, pweb, pweb->output_val.svalue.buf_addr, pweb->output_val.svalue.len_used, bufferx, 0);
-         }
+            {
+               char bufferx[256];
+               sprintf(bufferx, "ASCII stream response from DB Server: rc=%d; len_used=%d; get=%d;", rc, pval->svalue.len_used, get);
+               mg_log_buffer(pweb->plog, pweb, pval->svalue.buf_addr, pval->svalue.len_used + (rc > 0 ? rc : 0), bufferx, 0);
+            }
 */
-         if (pweb->output_val.svalue.len_used > 4) {
-            if (((unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 1]) == 0xff && ((unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 2]) == 0xff && ((unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 3]) == 0xff && ((unsigned char) pweb->output_val.svalue.buf_addr[pweb->output_val.svalue.len_used - 4]) == 0xff) {
-               eos = 1;
+            if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
                break;
+            }
+            else if (rc == 0) {
+               rc = NETX_READ_EOF;
+               break;
+            }
+
+            get -= rc;
+            pval->svalue.len_used += rc;
+            pweb->response_size += rc;
+/*
+            {
+               char bufferx[256];
+               sprintf(bufferx, "ASCII stream response from DB Server (last 4 Bytes): len_used=%d; %x %x %x %x;", pval->svalue.len_used, (unsigned char) pval->svalue.buf_addr[pval->svalue.len_used - 1], (unsigned char) pval->svalue.buf_addr[pval->svalue.len_used - 2], (unsigned char) pval->svalue.buf_addr[pval->svalue.len_used - 3], (unsigned char) pval->svalue.buf_addr[pval->svalue.len_used - 4]);
+               mg_log_buffer(pweb->plog, pweb, pval->svalue.buf_addr, pval->svalue.len_used, bufferx, 0);
+            }
+*/
+            if (pval->svalue.len_used > 4) {
+               if (((unsigned char) pval->svalue.buf_addr[pval->svalue.len_used - 1]) == 0xff && ((unsigned char) pval->svalue.buf_addr[pval->svalue.len_used - 2]) == 0xff && ((unsigned char) pval->svalue.buf_addr[pval->svalue.len_used - 3]) == 0xff && ((unsigned char) pval->svalue.buf_addr[pval->svalue.len_used - 4]) == 0xff) {
+                  eos = 1;
+                  break;
+               }
+            }
+         }
+
+         MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, pval->svalue.buf_addr, pval->svalue.len_used);
+
+         if (pval->svalue.len_used > 4) {
+            if (eos) {
+               pweb->response_remaining = 0;
+               pval->svalue.len_used -= 4;
+               pweb->response_size -= 4;
+            }
+            else {
+               pcon->stream_tail_len = 4;
+               memcpy((void *) pcon->stream_tail, (void *) (pval->svalue.buf_addr + (pval->svalue.len_used - 4)), pcon->stream_tail_len);
+               pval->svalue.len_used -= 4;
+               pweb->response_remaining = 4;
+            }
+            rc = CACHE_SUCCESS;
+         }
+
+         if (eos) {
+            rc = CACHE_SUCCESS;
+            break;
+         }
+         else {
+            if (mg_system.chunking && ((pweb->response_size > mg_system.chunking) || pweb->response_chunked)) {
+               /* Can't read the whole response, so start (or continue) chunking assuming chunking is allowed */
+               pweb->response_chunked = 1;
+               rc = CACHE_SUCCESS;
+               break;
+            }
+            else {
+               /* 2.0.8 */
+               pval = mg_extend_response_memory(pweb);
+               if (!pval) {
+                  rc = NETX_READ_ERROR;
+                  break;
+               }
             }
          }
       }
 
-      MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, pweb->output_val.svalue.buf_addr, pweb->output_val.svalue.len_used);
-
-      if (pweb->output_val.svalue.len_used > 4) {
-         if (eos) {
-            pweb->response_remaining = 0;
-            pweb->output_val.svalue.len_used -= 4;
-            pweb->response_size -= 4;
-         }
-         else {
-            pcon->stream_tail_len = 4;
-            memcpy((void *) pcon->stream_tail, (void *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used - 4)), pcon->stream_tail_len);
-            pweb->output_val.svalue.len_used -= 4;
-            pweb->response_remaining = 4;
-         }
-         rc = CACHE_SUCCESS;
-      }
       return rc;
    }
 
@@ -5341,7 +5554,7 @@ int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
    }
 
    for (;;) {
-      rc = netx_tcp_read(pcon, (unsigned char *) pweb->output_val.svalue.buf_addr + pweb->output_val.svalue.len_used, pweb->response_remaining, pcon->timeout, 1);
+      rc = netx_tcp_read(pcon, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, pweb->response_remaining, pcon->timeout, 1);
 /*
       {
          char bufferx[256];
@@ -5354,9 +5567,9 @@ int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
          break;
       }
 
-      MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, (pweb->output_val.svalue.buf_addr + pweb->output_val.svalue.len_used), pweb->response_remaining);
+      MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, (pval->svalue.buf_addr + pval->svalue.len_used), pweb->response_remaining);
 
-      pweb->output_val.svalue.len_used += pweb->response_remaining;
+      pval->svalue.len_used += pweb->response_remaining;
       pweb->response_size += pweb->response_remaining;
 
       rc = netx_tcp_read(pcon, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
@@ -5372,13 +5585,30 @@ int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
       }
       pweb->response_remaining = mg_get_size((unsigned char *) pweb->db_chunk_head);
       MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
-      if ((pweb->output_val.svalue.len_used + pweb->response_size) > (unsigned int) (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE)) {
-         /* Can't read the whole response, so start chunking */
-         rc = CACHE_SUCCESS;
-         break;
+      if ((pval->svalue.len_used + pweb->response_size) > (unsigned int) (pval->svalue.len_alloc - DBX_HEADER_SIZE)) {
+/*
+         {
+            char bufferx[256];
+            sprintf(bufferx, "Possibly Chunked response from DB Server: pweb->response_size=%lu; mg_system.chunking=%lu;", pweb->response_size, mg_system.chunking);
+            mg_log_event(pweb->plog, pweb, bufferx, "test", 0);
+         }
+*/
+         if (mg_system.chunking && ((pweb->response_size > mg_system.chunking) || pweb->response_chunked)) {
+            /* Can't read the whole response, so start (or continue) chunking assuming chunking is allowed */
+            pweb->response_chunked = 1;
+            rc = CACHE_SUCCESS;
+            break;
+         }
+         else {
+            /* 2.0.8 */
+            pval = mg_extend_response_memory(pweb);
+            if (!pval) {
+               rc = NETX_READ_ERROR;
+               break;
+            }
+         }
       }
    }
-
    return rc;
 }
 

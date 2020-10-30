@@ -31,12 +31,12 @@
 
 #define MAJORVERSION             2
 #define MINORVERSION             0
-#define MAINTVERSION             7
+#define MAINTVERSION             8
 #define BUILDNUMBER              0
 
 #define DBX_VERSION_MAJOR        "2"
 #define DBX_VERSION_MINOR        "0"
-#define DBX_VERSION_BUILD        "7"
+#define DBX_VERSION_BUILD        "8"
 
 #define DBX_VERSION              DBX_VERSION_MAJOR "." DBX_VERSION_MINOR "." DBX_VERSION_BUILD
 #define DBX_COMPANYNAME          "M/Gateway Developments Ltd\0"

@@ -854,8 +854,8 @@ typedef struct tagDBXCVAL {
 
 
 typedef struct tagDBXVAL {
-   int          type;
-   int          sort;
+   int               type;
+   int               sort;
    union {
       int            int32;
       long long      int64;
@@ -863,9 +863,10 @@ typedef struct tagDBXVAL {
       unsigned int   oref;
       char           *str;
    } num;
-   unsigned int   api_size;
-   DBXSTR         svalue;
-   DBXCVAL        cvalue;
+   unsigned int      api_size;
+   DBXSTR            svalue;
+   DBXCVAL           cvalue;
+   struct tagDBXVAL  *pnext;
 } DBXVAL, *PDBXVAL;
 
 
@@ -1088,15 +1089,24 @@ typedef struct tagDBXCON {
 } DBXCON, *PDBXCON;
 
 
+#define MG_CUSTOMPAGE_DBSERVER_NONE          0
+#define MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE   1
+#define MG_CUSTOMPAGE_DBSERVER_BUSY          2
+#define MG_CUSTOMPAGE_DBSERVER_DISABLED      3
+
 typedef struct tagMGSYS {
    int            config_size;
    int            cgi_max;
    int            timeout;
    unsigned long  requestno;
+   unsigned long  chunking;
    char           module_file[256];
    char           config_file[256];
    char           config_error[512];
    char           *config;
+   char           *custompage_dbserver_unavailable;
+   char           *custompage_dbserver_busy;
+   char           *custompage_dbserver_disabled;
    DBXLOG         *plog;
    char           cgi_base[64];
    char           *cgi[128];
@@ -1183,7 +1193,9 @@ typedef struct tagMGWEB {
    int            request_method_len;
    char           *query_string;
    int            query_string_len;
+   int            response_clen_server;
    int            response_streamed;
+   int            response_chunked;
    int            response_clen;
    unsigned int   response_size;
    unsigned int   response_remaining;
@@ -1198,6 +1210,7 @@ typedef struct tagMGWEB {
    DBXLOG         *plog;
    DBXSTR         input_buf;
    DBXVAL         output_val;
+   DBXVAL         *poutput_val_last;
    int            offset;
    DBXVAL         args[DBX_MAXARGS];
    ydb_buffer_t   yargs[DBX_MAXARGS];
@@ -1258,8 +1271,9 @@ int                     mg_websocket_exit             (MGWEB *pweb);
 /* Core code page */
 int                     mg_web                        (MGWEB *pweb);
 int                     mg_web_process                (MGWEB *pweb);
+int                     mg_parse_headers              (MGWEB *pweb);
 int                     mg_web_execute                (MGWEB *pweb, DBXCON *pcon);
-int                     mg_web_http_error             (MGWEB *pweb, int http_status_code);
+int                     mg_web_http_error             (MGWEB *pweb, int http_status_code, int custompage);
 int                     mg_get_all_cgi_variables      (MGWEB *pweb);
 int                     mg_get_path_configuration     (MGWEB *pweb);
 int                     mg_add_cgi_variable           (MGWEB *pweb, char *name, int name_len, char *value, int value_len);
@@ -1267,6 +1281,7 @@ DBXCON *                mg_obtain_connection          (MGWEB *pweb, MGSRV *psrv,
 int                     mg_connect                    (MGWEB *pweb, DBXCON *pcon, int context);
 int                     mg_release_connection         (MGWEB *pweb, DBXCON *pcon, int close_connection);
 MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen);
+DBXVAL *                mg_extend_response_memory     (MGWEB *pweb);
 int                     mg_release_request_memory     (MGWEB *pweb);
 int                     mg_worker_init                ();
 int                     mg_worker_exit                ();
