@@ -35,7 +35,7 @@ int mg_websocket_check(MGWEB *pweb)
 {
    int rc, n, len, lenu, lenc, upgrade_connection, protocol_version;
    char *p, *pa, *pz;
-   char upgrade[128], buffer[256], connection[256], wsfunction[256];
+   char upgrade[128], buffer[256], connection[256], wsfunction[128];
    char host[128], sec_websocket_key[256], token[256], hash[256], sec_websocket_accept[256], sec_websocket_protocol[32];
 
    protocol_version = 0;

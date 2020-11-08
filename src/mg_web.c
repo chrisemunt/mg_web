@@ -59,6 +59,13 @@ Version 2.0.8 30 October 2020:
    Introduce a configuration parameter ('chunking') to control the level at which HTTP chunked transfer is used. Chunking can be completely disabled ('chunking off'), or set to only be used if the response payload exceeds a certain size (e.g. 'chunking 250KB').
    Introduce the ability to define custom HTML pages (specified as full URLs) to be returned on mg_web error conditions. parameters: custompage_dbserver_unavailable, custompage_dbserver_busy, custompage_dbserver_disabled
 
+Version 2.1.9 6 November 2020:
+   Introduce the functionality to support load balancing and failover.
+      Web Path Configuration Parameters:
+         load_balancing <on|off> (default is off)
+         server_affinity variable:<variables, comma-separated> cookie:<name>
+   Correct a fault that led to response payloads being truncated when connecting to YottaDB via its API.
+
 */
 
 
@@ -154,6 +161,7 @@ __try {
 
 
    pweb->psrv = pweb->ppath->psrv[0];
+   pweb->server_no = -1;
 
    if (!pweb->psrv) {
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
@@ -171,10 +179,28 @@ __try {
    }
 */
 
+/*
    sprintf(buffer, "server=%s", pweb->psrv->name);
    len = (int) strlen(buffer);
    p = (unsigned char *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used + 5);
    strcpy((char *) p, buffer);
+   mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBSYS, DBX_DTYPE_STR);
+   pweb->input_buf.len_used += (len + 5);
+*/
+
+   strcpy(buffer, "server=01234567890123456789012345678901");
+   len = 39;
+   p = (unsigned char *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used + 5);
+   strcpy((char *) p, buffer);
+   pweb->server = (char *) (p + 7);
+   mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBSYS, DBX_DTYPE_STR);
+   pweb->input_buf.len_used += (len + 5);
+
+   strcpy(buffer, "server_no=00");
+   len = 12;
+   p = (unsigned char *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used + 5);
+   strcpy((char *) p, buffer);
+   pweb->serverno = (char *) (p + 10);
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBSYS, DBX_DTYPE_STR);
    pweb->input_buf.len_used += (len + 5);
 
@@ -207,7 +233,8 @@ __try {
    }
 
    if (pweb->request_clen) {
-      mg_client_read(pweb, (unsigned char *) pweb->input_buf.buf_addr + (pweb->input_buf.len_used + 5), pweb->request_clen);
+      pweb->request_content = (char *) pweb->input_buf.buf_addr + (pweb->input_buf.len_used + 5);
+      mg_client_read(pweb, (unsigned char *) pweb->request_content, pweb->request_clen);
       mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) pweb->request_clen, DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
       pweb->input_buf.len_used += (pweb->request_clen + 5);
    }
@@ -240,7 +267,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 int mg_web_process(MGWEB *pweb)
 {
-   int rc, len, get, get1, close_connection;
+   int rc, len, get, get1, close_connection, failover_no;
    unsigned char *p;
    char buffer[256];
    DBXCON *pcon;
@@ -265,6 +292,23 @@ __try {
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_DATA, DBX_DTYPE_STR);
    pweb->input_buf.len_used += (len + 5);
 
+   if (pweb->ppath->psrv[1]) { /* more than one server - look for affinity variable or cookie */
+      if (pweb->ppath->sa_order == 1) { /* look for server affinity variable first */
+         if (mg_find_sa_variable(pweb) == -1) {
+            if (pweb->ppath->sa_cookie) {
+               mg_find_sa_cookie(pweb);
+            }
+         }
+      }
+      else if (pweb->ppath->sa_order == 2) { /* look for server affinity cookie first */
+        if (mg_find_sa_cookie(pweb) == -1) {
+            if (pweb->ppath->sa_variables[0]) {
+               mg_find_sa_variable(pweb);
+            }
+         }
+      }
+   }
+
 /*
 {
    char bufferx[1024];
@@ -272,7 +316,13 @@ __try {
    mg_log_buffer(pweb->plog, pweb, pweb->input_buf.buf_addr, pweb->input_buf.len_used, bufferx, 0);
 }
 */
-   pcon = mg_obtain_connection(pweb, pweb->psrv, pweb->ppath);
+
+   failover_no = 0;
+   pweb->failover_possible = 1;
+
+mg_web_process_failover:
+
+   pcon = mg_obtain_connection(pweb);
 
    if (!pcon) {
       mg_log_event(pweb->plog, pweb, "Unable to allocate memory for a new connection", "mg_web: error", 0);
@@ -283,12 +333,22 @@ __try {
       return 0;
    }
    if (!pcon->alloc) {
+
       if (pcon->error[0]) {
          mg_log_event(pweb->plog, pweb, pcon->error, "mg_web: connectivity error", 0);
       }
       else {
          mg_log_event(pweb->plog, pweb, "Cannot connect to DB Server", "mg_web: connectivity error", 0);
       }
+
+      mg_server_offline(pweb, pweb->psrv, 0);
+      if (pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no) {
+         sprintf(pcon->error, "Cannot connect to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
+         mg_log_event(pweb->plog, pweb, pcon->error, "mg_web: connectivity error", 0);
+         failover_no ++;
+         goto mg_web_process_failover;
+      }
+
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
       mg_web_http_error(pweb, 503, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
 
@@ -297,7 +357,20 @@ __try {
       return 0;
    }
 
+   *(pweb->serverno) = (unsigned char) ((pweb->server_no / 10) + 48);
+   *(pweb->serverno + 1) = (unsigned char) ((pweb->server_no % 10) + 48);
+   strncpy(pweb->server, pweb->psrv->name, pweb->psrv->name_len);
+   pweb->server[pweb->psrv->name_len] = '\0';
    mg_set_size((unsigned char *) pweb->requestno, pweb->requestno_in);
+
+/*
+   {
+      int n;
+      for (n = 0; n < 3; n ++) {
+         netx_tcp_ping(pcon, pweb, 0);
+      }
+   }
+*/
 
    rc = mg_web_execute(pweb, pcon);
 /*
@@ -342,9 +415,23 @@ __try {
 
       mg_parse_headers(pweb);
 
+      pweb->response_headers_len = (int) strlen(pweb->response_headers);
+      if (pweb->ppath->sa_cookie) {
+         if (pweb->tls) {
+            sprintf(buffer, "\r\nSet-Cookie: %s=%d; path=/; httpOnly; secure;", (char *) pweb->ppath->sa_cookie, pweb->server_no);
+         }
+         else {
+            sprintf(buffer, "\r\nSet-Cookie: %s=%d; path=/; httpOnly;", (char *) pweb->ppath->sa_cookie, pweb->server_no);
+         }
+         len = (int) strlen(buffer);
+         strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
+         pweb->response_headers_len += len;
+      }
+
       if (pweb->response_clen_server >= 0) { /* DB server supplied content length */
          pweb->wserver_chunks_response = 1; /* Effectively turn off chunking */
-         strcpy(buffer, "\r\n\r\n");
+         strcpy(pweb->response_headers + pweb->response_headers_len, "\r\n\r\n");
+         pweb->response_headers_len += 4;
       }
       else {
          if (pweb->response_streamed && pweb->response_chunked && pweb->response_remaining > 0) {
@@ -357,9 +444,19 @@ __try {
             pweb->response_streamed = 0;
             sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
          }
+         len = (int) strlen(buffer);
+         strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
+         pweb->response_headers_len += len;
       }
-      strcat(pweb->response_headers, buffer);
-      pweb->response_headers_len = (int) strlen(pweb->response_headers);
+   }
+   else {
+      mg_server_offline(pweb, pweb->psrv, 0);
+      if (pweb->failover_possible && pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no) {
+         sprintf(pcon->error, "Cannot send request to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
+         mg_log_event(pweb->plog, pweb, pcon->error, "mg_web: connectivity error", 0);
+         failover_no ++;
+         goto mg_web_process_failover;
+      }
    }
 
    if (rc != CACHE_SUCCESS) {
@@ -612,6 +709,7 @@ __try {
    else if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
       ydb_string_t out, in1, in2, in3;
 
+      pweb->failover_possible = 0;
       strcat(fun.label, "_zmgsis");
       fun.label_len = (int) strlen(label);
 
@@ -629,9 +727,23 @@ __try {
       DBX_LOCK(rc, 0);
       rc = pcon->p_ydb_so->p_ydb_ci(fun.label, &out, &in1, &in2, &in3);
 
+/*
+{
+   char bufferx[1024];
+   sprintf(bufferx, "mg_web_execute (YottaDB): rc=%d; len_used=%d; len_used=%d; out.length=%d;", rc,  pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, (int) out.length);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web_execute: YottaDB API", 0);
+}
+*/
+//cmtxxx
       if (rc == YDB_OK) {
+/*
          pweb->output_val.svalue.len_used = (unsigned int) mg_get_size((unsigned char *) pweb->output_val.svalue.buf_addr);
          pweb->response_size = (pweb->output_val.svalue.len_used - 5);
+*/
+         pweb->output_val.api_size = (unsigned int) out.length;
+         pweb->output_val.svalue.len_used = pweb->output_val.api_size;
+         pweb->response_size = (pweb->output_val.api_size - 5);
+         pweb->response_remaining = 0;
       }
       else if (pcon->p_ydb_so->p_ydb_zstatus) {
          pcon->p_ydb_so->p_ydb_zstatus((ydb_char_t *) pcon->error, (ydb_long_t) 255);
@@ -640,6 +752,7 @@ __try {
       DBX_UNLOCK(rc);
    }
    else {
+      pweb->failover_possible = 0;
       strcpy(buffer, "");
 
       DBX_LOCK(rc, 0);
@@ -792,10 +905,20 @@ int mg_get_all_cgi_variables(MGWEB *pweb)
 {
    int result, rc, n, len, lenv;
    char *p;
+   char buffer[32];
 
 #ifdef _WIN32
 __try {
 #endif
+
+   lenv = 32;
+   rc = mg_get_cgi_variable(pweb, "HTTPS", buffer, &lenv);
+   if (rc == MG_CGI_SUCCESS) {
+      mg_lcase(buffer);
+      if (!strcmp(buffer, "on")) {
+         pweb->tls = 1;
+      }
+   }
 
    result = 0;
    for (n = 0; n < mg_system.cgi_max; n ++) {
@@ -950,17 +1073,41 @@ int mg_add_cgi_variable(MGWEB *pweb, char *name, int name_len, char *value, int 
 }
 
 
-DBXCON * mg_obtain_connection(MGWEB *pweb, MGSRV *psrv, MGPATH *ppath)
+DBXCON * mg_obtain_connection(MGWEB *pweb)
 {
    int rc, use_existing;
    DBXCON *pcon, *pcon_last, *pcon_free;
+   MGSRV *psrv;
+   MGPATH *ppath;
    char *p, *p1, *p2;
 
+   psrv = pweb->psrv;
+   ppath = pweb->ppath;
    use_existing = 0;
    pcon_free = NULL;
    pcon_last = NULL;
 
    mg_enter_critical_section((void *) &mg_global_mutex);
+
+   if (pweb->server_no >= 0 && pweb->server_no < 32) {
+      if (ppath->psrv[pweb->server_no] && ppath->psrv[pweb->server_no]->offline == 0) {
+         psrv = ppath->psrv[pweb->server_no];
+      }
+      else {
+         pweb->server_no = -1;
+      }
+   }
+   if (pweb->server_no == -1) {
+      pweb->server_no = mg_obtain_server(pweb, 0);
+      if (pweb->server_no == -1) { /* no online servers in list */
+         pweb->server_no = 0;
+         pweb->psrv = ppath->psrv[pweb->server_no];
+         mg_leave_critical_section((void *) &mg_global_mutex);
+         return NULL;
+      }
+      psrv = ppath->psrv[pweb->server_no];
+   }
+
    pcon = mg_connection;
    while (pcon) {
       pcon_last = pcon;
@@ -1011,6 +1158,7 @@ DBXCON * mg_obtain_connection(MGWEB *pweb, MGSRV *psrv, MGPATH *ppath)
    }
    mg_leave_critical_section((void *) &mg_global_mutex);
 
+   pweb->psrv = psrv;
    if (!pcon) {
       return NULL;
    }
@@ -1091,6 +1239,62 @@ DBXCON * mg_obtain_connection(MGWEB *pweb, MGSRV *psrv, MGPATH *ppath)
    }
 
    return pcon;
+}
+
+
+int mg_obtain_server(MGWEB *pweb, int context)
+{
+   int server_no, server_no_start;
+
+   server_no_start = pweb->ppath->server_no;
+   server_no = -1;
+   while (server_no == -1) {
+      if (pweb->ppath->psrv[pweb->ppath->server_no]->offline == 0) {
+         server_no = pweb->ppath->server_no;
+      }
+      if (pweb->ppath->load_balancing || pweb->ppath->psrv[pweb->ppath->server_no]->offline == 1) { /* increment core server number if one is offline or load balancing is on */
+         pweb->ppath->server_no ++;
+         if (!pweb->ppath->psrv[pweb->ppath->server_no]) {
+            pweb->ppath->server_no = 0;
+         }
+      }
+      if (pweb->ppath->server_no == server_no_start) { /* all servers examined */
+         break;
+      }
+   }
+   return server_no;
+}
+
+
+int mg_server_offline(MGWEB *pweb, MGSRV *psrv, int context)
+{
+   DBXCON *pcon;
+
+   if (!psrv || !pweb->ppath) {
+      return -1;
+   }
+   if (!pweb->ppath->psrv[1]) { /* only one server, therefore no failover */
+      return -1;
+   }
+
+   /* block new connections to this server */
+   mg_enter_critical_section((void *) &mg_global_mutex);
+
+   psrv->offline = 1;
+
+   mg_leave_critical_section((void *) &mg_global_mutex);
+
+   pcon = mg_connection;
+   while (pcon) {
+      if (pcon->alloc && pcon->psrv == psrv) {
+         if (psrv->net_connection == 1 && pcon->inuse == 0) { /* network */
+            mg_release_connection(pweb, pcon, 1);
+         }
+      }
+      pcon = pcon->pnext;
+   }
+
+   return 0;
 }
 
 
@@ -1327,6 +1531,197 @@ int mg_release_request_memory(MGWEB *pweb)
 }
 
 
+int mg_find_sa_variable(MGWEB *pweb)
+{
+   int rc, n, server_no, len, name_len;
+
+   server_no = -1;
+
+/*
+{
+   char bufferx[1024];
+   sprintf(bufferx, "HTTP Request: pweb=%p; psrv=%p; ppath=%p;", (void *) pweb, (void *) pweb->psrv, (void *) pweb->ppath);
+   mg_log_buffer(pweb->plog, pweb, pweb->input_buf.buf_addr, pweb->input_buf.len_used, bufferx, 0);
+}
+*/
+
+   for (n = 0; pweb->ppath->sa_variables[n]; n ++) {
+      name_len = (int) strlen(pweb->ppath->sa_variables[n]);
+      if (pweb->query_string && pweb->query_string_len) {
+         server_no = mg_find_sa_variable_ex(pweb, pweb->ppath->sa_variables[n], name_len, (unsigned char *) pweb->query_string, pweb->query_string_len);
+         if (server_no != -1) {
+            break;
+         }
+      }
+      if (pweb->request_content && pweb->request_clen) {
+         rc = MG_CGI_SUCCESS;
+         if (!pweb->request_content_type[0]) {
+            len = 1020;
+            rc = mg_get_cgi_variable(pweb, "CONTENT_TYPE", pweb->request_content_type, &len);
+         }
+         if (rc == MG_CGI_SUCCESS && strstr(pweb->request_content_type, "application/x-www-form-urlencoded")) {
+            server_no = mg_find_sa_variable_ex(pweb,  pweb->ppath->sa_variables[n], name_len, (unsigned char *) pweb->request_content, pweb->request_clen);
+            if (server_no != -1) {
+               break;
+            }
+         }
+      }
+   }
+
+   if (server_no != -1) {
+      pweb->server_no = server_no;
+   }
+
+   return server_no;
+}
+
+
+int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char *nvpairs, int nvpairs_len)
+{
+   int server_no, n;
+   unsigned char cnvz;
+   char *pn, *pv, *pz;
+
+   cnvz = nvpairs[nvpairs_len];
+   nvpairs[nvpairs_len] = '\0';
+   server_no = -1;
+
+   pn = strstr((char *) nvpairs, name);
+   while (pn) {
+      if (pn == (char *) nvpairs || *(pn - 1) == '&') {
+         if (*(pn + name_len) == '=') {
+            pv = pn + name_len + 1;
+            pz = strstr(pv, "&");
+            if (pz) {
+               *pz = '\0';
+            }
+
+            if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
+               server_no = (int) strtol(pv, NULL, 10);
+            }
+            else {
+               for (n = 0; pweb->ppath->servers[n]; n ++) {
+                  if (!strcmp(pweb->ppath->servers[n], pv)) {
+                     server_no = n;
+                     break;
+                  }
+               }
+            }
+
+            if (pz) {
+               *pz = '&';
+            }
+         }
+      }
+      if (server_no != -1) {
+         break;
+      }
+      pn = strstr(pn + name_len, name);
+   }
+
+   nvpairs[nvpairs_len] = cnvz;
+
+/*
+   {
+      char bufferx[256];
+      if (server_no == -1) {
+         sprintf(bufferx, "mg_find_sa_variable_ex: name=%s; server_no=%d (not found)", name, server_no);
+         mg_log_buffer(pweb->plog, pweb, (char *) nvpairs, nvpairs_len, bufferx, 0);
+      }
+      else {
+         sprintf(bufferx, "mg_find_sa_variable_ex: name=%s; server_no=%d", name, server_no);
+         mg_log_buffer(pweb->plog, pweb, (char *) nvpairs, nvpairs_len, bufferx, 0);
+      }
+   }
+*/
+
+   return server_no;
+}
+
+
+int mg_find_sa_cookie(MGWEB *pweb)
+{
+   int server_no, n, rc, len, name_len;
+   char *pn, *pv, *pz;
+
+   server_no = -1;
+
+   name_len = (int) strlen(pweb->ppath->sa_cookie);
+
+   len = 4096;
+   pweb->request_cookie = (char *) mg_malloc(NULL, len + 32, 0);
+   if (!pweb->request_cookie) {
+      return server_no;
+   }
+   for (n = 0; n < 3; n ++) {
+      rc = mg_get_cgi_variable(pweb, "HTTP_COOKIE", pweb->request_cookie, &len);
+
+      if (rc == MG_CGI_TOOLONG) {
+         mg_free(NULL, (void *) pweb->request_cookie, 0);
+         len = (n + 2) * 4096;
+         pweb->request_cookie = (char *) mg_malloc(NULL, len + 32, 0);
+         if (!pweb->request_cookie) {
+            break;
+         }
+         continue;
+      }
+      break;
+   }
+   if (rc != MG_CGI_SUCCESS || !pweb->request_cookie) {
+      return server_no;
+   }
+
+   pn = strstr(pweb->request_cookie, pweb->ppath->sa_cookie);
+   while (pn) {
+      if (pn == pweb->request_cookie || *(pn - 1) == ';' || *(pn - 1) == ' ') {
+         if (*(pn + name_len) == '=') {
+            pv = pn + name_len + 1;
+            pz = strstr(pv, ";");
+            if (pz) {
+               *pz = '\0';
+            }
+
+            if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
+               server_no = (int) strtol(pv, NULL, 10);
+            }
+            else {
+               for (n = 0; pweb->ppath->servers[n]; n ++) {
+                  if (!strcmp(pweb->ppath->servers[n], pv)) {
+                     server_no = n;
+                     break;
+                  }
+               }
+            }
+
+            if (pz) {
+               *pz = ';';
+            }
+         }
+      }
+      if (server_no != -1) {
+         break;
+      }
+      pn = strstr(pn + name_len, pweb->ppath->sa_cookie);
+   }
+
+/*
+   {
+      char bufferx[256];
+      if (server_no == -1) {
+         sprintf(bufferx, "mg_find_sa_cookie: name=%s; server_no=%d (not found)", pweb->ppath->sa_cookie, server_no);
+         mg_log_buffer(pweb->plog, pweb, pweb->request_cookie, (int) strlen(pweb->request_cookie), bufferx, 0);
+      }
+      else {
+         sprintf(bufferx, "mg_find_sa_cookie: name=%s; server_no=%d", pweb->ppath->sa_cookie, server_no);
+         mg_log_buffer(pweb->plog, pweb, pweb->request_cookie, (int) strlen(pweb->request_cookie), bufferx, 0);
+      }
+   }
+*/
+
+   return server_no;
+}
+
+
 int mg_worker_init()
 {
 #if defined(_WIN32)
@@ -1404,6 +1799,13 @@ __try {
    mg_init_critical_section((void *) &mg_global_mutex);
 
    mg_system.config = (char *) mg_malloc(NULL, size + size_default + 32, 0);
+   if (!mg_system.config) {
+      mg_system.plog = &(mg_system.log);
+      mg_system.log.req_no = 0;
+      mg_system.log.fun_no = 0;
+      strcpy(mg_system.config_error, "Memory allocation error (char *:mg_system.config)");
+      return 0;
+   }
    memset((void *) mg_system.config, 0, size + size_default + 32);
 
    if (size) {
@@ -1493,8 +1895,8 @@ int mg_worker_exit()
 
 int mg_parse_config()
 {
-   int wn, ln, n, len, line_len, size, inserver, inpath, incgi, inenv, eos;
-   char *pa, *pz, *peol;
+   int wn, vn, ln, n, len, lenx, line_len, size, inserver, inpath, incgi, inenv, eos;
+   char *pa, *pz, *peol, *p;
    char *word[256];
    char line[1024];
    MGSRV *psrv, *psrv_prev;
@@ -1558,7 +1960,12 @@ __try {
          }
          size ++;
          if (size > 100000) {
-            sprintf(mg_system.config_error, "Possible infinite loop parsing a line in the configuration file (%s) %s", mg_system.config_file, line);
+            sprintf(mg_system.config_error, "Possible infinite loop parsing a line in the configuration file (%s)", mg_system.config_file);
+            lenx = (int) strlen(mg_system.config_error);
+            if (lenx < 500) {
+               strncpy(mg_system.config_error + lenx, line, 500 - lenx);
+               mg_system.config_error[500] = '\0';
+            }
             mg_log_event(&(mg_system.log), NULL, mg_system.config_error, "mg_web: configuration error", 0);
             break;
          }
@@ -1595,7 +2002,12 @@ __try {
                      word[1][len] = '\0';
                   }
                   psrv = (MGSRV *) mg_malloc(NULL, sizeof(MGSRV), 0);
+                  if (!psrv) {
+                     strcpy(mg_system.config_error, "Memory allocation error (MGSRV)");
+                     break;
+                  }
                   memset((void *) psrv, 0, sizeof(MGSRV));
+                  psrv->offline = 0;
                   if (psrv_prev) {
                      psrv_prev->pnext = psrv;
                   }
@@ -1620,7 +2032,17 @@ __try {
                      word[1][len] = '\0';
                   }
                   ppath = (MGPATH *) mg_malloc(NULL, sizeof(MGPATH), 0);
+                  if (!ppath) {
+                     strcpy(mg_system.config_error, "Memory allocation error (MGPATH)");
+                     break;
+                  }
                   memset((void *) ppath, 0, sizeof(MGPATH));
+                  ppath->load_balancing = 0;
+                  ppath->sa_cookie = NULL;
+                  ppath->sa_order = 0;
+                  ppath->sa_variables[0] = NULL;
+                  ppath->server_no = 0;
+                  ppath->srv_max = 0;
                   if (ppath_prev) {
                      ppath_prev->pnext = ppath;
                   }
@@ -1648,6 +2070,10 @@ __try {
                if (inenv) {
                   if (!psrv->penv) {
                      psrv->penv = (MGBUF *) mg_malloc(NULL, sizeof(MGBUF), 0);
+                     if (!psrv->penv) {
+                        strcpy(mg_system.config_error, "Memory allocation error (MGBUF:ENV)");
+                        break;
+                     }
                      mg_buf_init(psrv->penv, 1024, 1024);
                   }
                   if (psrv->penv && line_len) {
@@ -1706,6 +2132,52 @@ __try {
                      for (n = 1; n < wn; n ++) {
                         if (ppath->srv_max < 30) {
                            ppath->servers[ppath->srv_max ++] = word[n];
+                        }
+                     }
+                  }
+                  else if (!strcmp(word[0], "load_balancing")) {
+                     ppath->load_balancing = 0;
+                     mg_lcase(word[1]);
+                     if (!strcmp(word[1], "on")) {
+                        ppath->load_balancing = 1;
+                     }
+                  }
+                  else if (!strcmp(word[0], "server_affinity")) {
+                     ppath->sa_order = 0;
+                     for (n = 1; n < wn; n ++) {
+                        p = strstr(word[n], ":");
+                        if (p) {
+                           *p = '\0';
+                           mg_lcase(word[n]);
+                           if (!strcmp("variable", word[n])) {
+                              if (!ppath->sa_order) {
+                                 ppath->sa_order = 1; /* use sa variables first */
+                              }
+                              p ++;
+                              vn = 0;
+                              while (p && *p) {
+                                 if (vn < 4)
+                                    ppath->sa_variables[vn ++] = p;
+                                 p = strstr(p, ",");
+                                 if (p) {
+                                    *p = '\0';
+                                    p ++;
+                                 }
+                              }
+                              ppath->sa_variables[vn] = NULL;
+                           }
+                           else if (!strcmp("cookie", word[n])) {
+                              if (!ppath->sa_order) {
+                                 ppath->sa_order = 2; /* use sa cookie first */
+                              }
+                              ppath->sa_cookie = p + 1;
+                              if (!strlen(ppath->sa_cookie)) {
+                                 ppath->sa_cookie = NULL;
+                              }
+                           }
+                           else {
+                              sprintf(mg_system.config_error, "Invalid 'location' parameter '%s' on line %d", word[0], ln); 
+                           }
                         }
                      }
                   }
@@ -1819,6 +2291,7 @@ int mg_verify_config()
 {
    int n;
    char *pbuf;
+   char buffer[256];
    MGSRV *psrv;
    MGPATH *ppath;
 
@@ -1841,7 +2314,7 @@ __try {
    }
 
    if (pbuf) {
-      sprintf(pbuf, "response timeout=%d; CGI Variables requested=%d;", mg_system.timeout, mg_system.cgi_max);
+      sprintf(pbuf, "response timeout=%d; CGI Variables requested=%d; chunking=%lu;", mg_system.timeout, mg_system.cgi_max, mg_system.chunking);
       mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: global section", 0);
    }
 
@@ -1943,7 +2416,27 @@ __try {
       }
 
       if (pbuf) {
-         sprintf(pbuf, "location name=%s; function=%s; server1=%s; server2=%s;", ppath->name, ppath->function ? ppath->function : "null", ppath->servers[0] ? ppath->servers[0] : "null", ppath->servers[1] ? ppath->servers[1] : "null" );
+         sprintf(pbuf, "location name=%s; function=%s; load balancing=%d; SA precedence=%d; SA cookie=%s", ppath->name, ppath->function ? ppath->function : "null", ppath->load_balancing, ppath->sa_order, ppath->sa_cookie ? ppath->sa_cookie : "null");
+         if (ppath->sa_variables[0]) {
+            for (n = 0; ppath->sa_variables[n]; n ++) {
+               if (!n) {
+                  strcat(pbuf, "; SA variable=");
+                  strcat(pbuf, ppath->sa_variables[n]);
+               }
+               else {
+                  strcat(pbuf, " and ");
+                  strcat(pbuf, ppath->sa_variables[n]);
+               }
+            }
+         }
+         else {
+            strcat(pbuf, "; SA variable=null");
+         }
+         for (n = 0; ppath->servers[n]; n ++) {
+            sprintf(buffer, "; server %d=", n);
+            strcat(pbuf, buffer);
+            strcat(pbuf, ppath->servers[n]);
+         }
          mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: location", 0);
       }
 
@@ -2285,6 +2778,10 @@ int isc_load_library(DBXCON *pcon)
       goto isc_load_library_exit;
    }
 
+   pcon->p_isc_so->p_CachePushInt64 = (int (*) (long long)) NULL;
+   pcon->p_isc_so->p_CachePopInt64 = (int (*) (long long *)) NULL;
+
+/*
    sprintf(fun, "%sPushInt64", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushInt64 = (int (*) (CACHE_INT64)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushInt64) {
@@ -2304,6 +2801,7 @@ int isc_load_library(DBXCON *pcon)
       sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
+*/
 
    sprintf(fun, "%sPushGlobal", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushGlobal = (int (*) (int, const Callin_char_t *)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
@@ -2651,8 +3149,6 @@ int isc_open(DBXCON *pcon)
    if (pcon->p_isc_so->loaded == 2) {
       strcpy(pcon->error, "Cannot create multiple connections to the database");
       pcon->error_code = 1009; 
-      strncpy(pcon->error, pcon->error, DBX_ERROR_SIZE - 1);
-      pcon->error[DBX_ERROR_SIZE - 1] = '\0';
       rc = CACHE_NOCON;
       goto isc_open_exit;
    }
@@ -3215,8 +3711,6 @@ int ydb_open(DBXCON *pcon)
    if (pcon->p_ydb_so->loaded == 2) {
       strcpy(pcon->error, "Cannot create multiple connections to the database");
       pcon->error_code = 1009; 
-      strncpy(pcon->error, pcon->error, DBX_ERROR_SIZE - 1);
-      pcon->error[DBX_ERROR_SIZE - 1] = '\0';
       rc = CACHE_NOCON;
       goto ydb_open_exit;
    }
@@ -3516,8 +4010,6 @@ int gtm_open(DBXCON *pcon)
    if (pcon->p_gtm_so->loaded == 2) {
       strcpy(pcon->error, "Cannot create multiple connections to the database");
       pcon->error_code = 1009; 
-      strncpy(pcon->error, pcon->error, DBX_ERROR_SIZE - 1);
-      pcon->error[DBX_ERROR_SIZE - 1] = '\0';
       rc = CACHE_NOCON;
       goto gtm_open_exit;
    }
@@ -5238,7 +5730,7 @@ int netx_tcp_handshake(DBXCON *pcon, int context)
    int len;
    char buffer[256];
 
-   sprintf(buffer, "dbx1~%s\n", pcon->psrv->uci);
+   sprintf(buffer, "dbx1~%s\n", pcon->psrv->uci ? pcon->psrv->uci : "");
    len = (int) strlen(buffer);
 
    netx_tcp_write(pcon, (unsigned char *) buffer, len);
@@ -5256,6 +5748,45 @@ int netx_tcp_handshake(DBXCON *pcon, int context)
 
    return 0;
 }
+
+
+int netx_tcp_ping(DBXCON *pcon, MGWEB *pweb, int context)
+{
+   int rc;
+   unsigned char netbuf[32];
+   unsigned long netbuf_used;
+
+   netbuf_used = 5;
+   mg_add_block_size((unsigned char *) netbuf, 0, 0, 0, DBX_CMND_PING);
+/*
+   {
+      char bufferx[256];
+      sprintf(bufferx, "netx_tcp_ping SEND netbuf_used=%d;", (int) netbuf_used);
+      mg_log_buffer(&(mg_system.log), pweb, (char *) netbuf, 5, bufferx, 0);
+   }
+*/
+   rc = netx_tcp_write(pcon, (unsigned char *) netbuf, netbuf_used);
+   if (rc < 0) {
+      return -1;
+   }
+   rc = netx_tcp_read(pcon, (unsigned char *) netbuf, 20, pcon->timeout, 1);
+/*
+   {
+      char bufferx[256];
+      sprintf(bufferx, "netx_tcp_ping RECV rc=%d; pcon->closed=%d;", rc, pcon->closed);
+      mg_log_buffer(&(mg_system.log), pweb, (char *) netbuf, rc, bufferx, 0);
+   }
+*/
+   if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
+      return rc;
+   }
+   if (rc < 0) {
+      return rc;
+   }
+
+   return 0;
+}
+
 
 /*
 
@@ -5351,6 +5882,7 @@ netx_tcp_command_reconnect:
 }
 */
 
+   pweb->failover_possible = 0; /* can't failover after this point */
    pweb->output_val.svalue.len_used = 0;
 
    rc = netx_tcp_read(pcon, (unsigned char *) pweb->output_val.svalue.buf_addr, offset, pcon->timeout, 1);

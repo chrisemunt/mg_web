@@ -304,6 +304,7 @@ typedef int    xc_status_t;
 #define DBX_DTYPE_NULL           10
 
 #define DBX_CMND_FUNCTION        31
+#define DBX_CMND_PING            90
 
 #define DBX_IBUFFER_OFFSET       15
 
@@ -320,6 +321,7 @@ typedef int    xc_status_t;
 #endif
 
 #define DBX_WEB_ROUTINE          "dbxweb^%zmgsis"
+#define DBX_PING_ROUTINE         "dbxping^%zmgsis"
 
 #if defined(_WIN32)
 #define DBX_NULL_DEVICE          "//./nul"
@@ -1024,6 +1026,7 @@ typedef struct tagDBXGTMSO {
 
 typedef struct tagMGSRV {
    short       dbtype;
+   short       offline;
    char        *name;
    int         name_len;
    char        *uci;
@@ -1049,6 +1052,11 @@ typedef struct tagMGPATH {
    char        *name;
    int         name_len;
    char        *function;
+   int         load_balancing;
+   int         server_no;
+   int         sa_order;
+   char        *sa_cookie;
+   char        *sa_variables[4];
    char        *servers[32];
    MGSRV       *psrv[32];
    char        *cgi[128];
@@ -1182,10 +1190,13 @@ typedef struct tagMGWEBSOCK {
 
 typedef struct tagMGWEB {
    int            evented;
+   int            tls;
    int            http_version_major;
    int            http_version_minor;
    int            wserver_chunks_response;
+   int            failover_possible;
    int            request_clen;
+   char           *request_content;
    char           *script_name;
    int            script_name_len;
    char           script_name_lc[256];
@@ -1193,6 +1204,8 @@ typedef struct tagMGWEB {
    int            request_method_len;
    char           *query_string;
    int            query_string_len;
+   char           request_content_type[1024];
+   char           *request_cookie;
    int            response_clen_server;
    int            response_streamed;
    int            response_chunked;
@@ -1206,6 +1219,8 @@ typedef struct tagMGWEB {
    unsigned long  requestno_in;
    unsigned long  requestno_out;
    char           *requestno;
+   char           *server;
+   char           *serverno;
    unsigned char  db_chunk_head[8];
    DBXLOG         *plog;
    DBXSTR         input_buf;
@@ -1215,6 +1230,7 @@ typedef struct tagMGWEB {
    DBXVAL         args[DBX_MAXARGS];
    ydb_buffer_t   yargs[DBX_MAXARGS];
    MGPATH         *ppath;
+   int            server_no;
    MGSRV          *psrv;
    DBXCON         *pcon;
    MGWEBSOCK      *pwsock;
@@ -1277,12 +1293,17 @@ int                     mg_web_http_error             (MGWEB *pweb, int http_sta
 int                     mg_get_all_cgi_variables      (MGWEB *pweb);
 int                     mg_get_path_configuration     (MGWEB *pweb);
 int                     mg_add_cgi_variable           (MGWEB *pweb, char *name, int name_len, char *value, int value_len);
-DBXCON *                mg_obtain_connection          (MGWEB *pweb, MGSRV *psrv, MGPATH *ppath);
+DBXCON *                mg_obtain_connection          (MGWEB *pweb);
+int                     mg_obtain_server              (MGWEB *pweb, int context);
+int                     mg_server_offline             (MGWEB *pweb, MGSRV *psrv, int context);
 int                     mg_connect                    (MGWEB *pweb, DBXCON *pcon, int context);
 int                     mg_release_connection         (MGWEB *pweb, DBXCON *pcon, int close_connection);
 MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen);
 DBXVAL *                mg_extend_response_memory     (MGWEB *pweb);
 int                     mg_release_request_memory     (MGWEB *pweb);
+int                     mg_find_sa_variable           (MGWEB *pweb);
+int                     mg_find_sa_variable_ex        (MGWEB *pweb, char *name, int name_len, unsigned char *nvpairs, int nvpairs_len);
+int                     mg_find_sa_cookie             (MGWEB *pweb);
 int                     mg_worker_init                ();
 int                     mg_worker_exit                ();
 int                     mg_parse_config               ();
@@ -1353,6 +1374,7 @@ unsigned int            mg_file_size                  (char *file);
 int                     netx_load_winsock             (DBXCON *pcon, int context);
 int                     netx_tcp_connect              (DBXCON *pcon, int context);
 int                     netx_tcp_handshake            (DBXCON *pcon, int context);
+int                     netx_tcp_ping                 (DBXCON *pcon, MGWEB *pweb, int context);
 int                     netx_tcp_command              (DBXCON *pcon, MGWEB *pweb, int command, int context);
 int                     netx_tcp_read_stream          (DBXCON *pcon, MGWEB *pweb);
 int                     netx_tcp_connect_ex           (DBXCON *pcon, xLPSOCKADDR p_srv_addr, socklen_netx srv_addr_len, int timeout);
