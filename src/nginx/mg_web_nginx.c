@@ -348,6 +348,7 @@ static ngx_int_t mg_handler(ngx_http_request_t *r)
 
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) pweb->request_clen, DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
    pweb->input_buf.len_used += 5;
+   pweb->request_content = (char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used;
 
    rc = ngx_http_read_client_request_body(r, mg_payload_handler);
 
