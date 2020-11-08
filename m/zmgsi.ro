@@ -1,5 +1,5 @@
 Cache for Windows^INT^zmgsi
-%RO on 24 Sep 2020 01:00 AM
+%RO on 08 Nov 2020 01:00 AM
 %zmgsi
 %zmgsi ;(CM) Service Integration - Core Server
  ;
@@ -384,12 +384,13 @@ a0 d vers q
  ; v3.4.12:  10 August    2020 (Introduce streamed write for mg_web; export the data-types for the SQL interface)
  ; v3.5.13:  29 August    2020 (Introduce ASCII streamed write for mg_web; Introduce websocket support; reset ISC namespace after each web request)
  ; v3.5.14:  24 September 2020 (Add a getdatetime() function)
+ ; v3.6.15:   6 November  2020 (Add functionality to support load balancing and failover in mg_web)
  ;
 v() ; version and date
  n v,r,d
- s v="3.5"
- s r=14
- s d="24 September 2020"
+ s v="3.6"
+ s r=15
+ s d="6 November 2020"
  q v_"."_r_"."_d
  ;
 vers ; version information
@@ -2068,12 +2069,14 @@ dbxnet(buf) ; new wire protocol for access to M
  s res=$zv
  s res=$$esize256($l(res))_"0"_res
  w res d flush
-dbxnet1 ; test
+dbxnet1 ; request loop
  r head#5
  s len=$$dsize256(head)
  s len=len-5
  s cmnd=$e(head,5)
+ i len<1,$a(cmnd)=90 w $$ping("") d flush g dbxnet1
  i len>$$getmsl() s res="DB Server string size exceeded ("_$$getmsl()_")",sort=11,type=1,res=$$esize256($l(res))_$c((sort*20)+type)_res w res d flush c $io h
+ i len<1 q
  r data#len
  s res=$$dbx(0,cmnd,data,len,"")
  w res d flush
@@ -2085,7 +2088,7 @@ dbxcmnd(%r,%oref,cmnd,res) ; Execute command
  s res=""
  i cmnd=2 s res=0 q 0
  i cmnd=3 s res=$$getuci() q 0
- i cmnd=4 d uci(%r(1)) s res=$$getuci() q 0
+ i cmnd=4 d uci($g(%r(1))) s res=$$getuci() q 0
  i cmnd=11 s @($$dbxglo(%r(1))_$$dbxref(.%r,2,%r-1,0))=%r(%r),res=0 q 0
  i cmnd=12 s res=$g(@($$dbxglo(%r(1))_$$dbxref(.%r,2,%r,0))) q 0
  i cmnd=13 s res=$o(@($$dbxglo(%r(1))_$$dbxref(.%r,2,%r,0))) q 0
@@ -2169,6 +2172,12 @@ dbxmeth(%r,meth) ; Execute function
  s @("res=$Method("_meth_")")
  q res
  ;
+ping(param) ; simple ping operation
+ n res
+ s res=$h_"#"
+ s res=res_$e("01234567890123456789",1,20-$l(res))
+ q res
+ ;
 dbxweb(ctx,data,param) ; mg_web function invocation
  n %r,%cgi,%var,%sys,offset,ok,sort,type,item,no,res,len,uci
  s $zt="dbxwebe^%zmgsis" ; new $ztrap set $ztrap="zgoto "_$zlevel_":dbxwebe^%zmgsis"
@@ -2185,6 +2194,8 @@ dbxweb(ctx,data,param) ; mg_web function invocation
  . q
  s %sys("no")=$$dsize256($g(%sys("no")))
  s no=$g(%sys("no"))+0
+ s %sys("server")=$p($g(%sys("server")),$c(0),1)
+ s %sys("server_no")=+$g(%sys("server_no"))
  i $g(%sys("wsfunction"))'="" q $$mgwebsock(.%cgi,.%var,.%sys)
  i $g(%sys("function"))="" q $$esize256(no)_$c(0)_$$mgweb(.%cgi,.%var,.%sys)
  s uci=$$getuci()
