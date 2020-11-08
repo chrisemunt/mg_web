@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-30 October 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+6 November 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.0; Revision 8.
+* Current Release: Version: 2.1; Revision 9.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -165,4 +165,12 @@ Unless required by applicable law or agreed to in writing, software distributed 
 	* DB Server unavailable (parameter: **custompage\_dbserver\_unavailable**)
 	* DB Server busy (parameter: **custompage\_dbserver\_busy**).
 	* DB Server disabled (parameter: **custompage\_dbserver\_disabled**)
+
+### v2.1.9 (6 November 2020)
+
+* Introduce the functionality to support load balancing and fail-over.
+	* Web Path Configuration Parameters:
+		* **load\_balancing** [on|off] (default is off)
+		* **server\_affinity** variable:[variable(s)] cookie:[name]
+* Correct a fault that led to response payloads being truncated when connecting to YottaDB via its API.
 
