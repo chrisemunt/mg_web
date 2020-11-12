@@ -66,6 +66,12 @@ Version 2.1.9 6 November 2020:
          server_affinity variable:<variables, comma-separated> cookie:<name>
    Correct a fault that led to response payloads being truncated when connecting to YottaDB via its API.
 
+Version 2.1.10 12 November 2020:
+   Correct a fault that led to web server worker processes crashing if an error occurred while processing a request via a DB Server API
+      Error conditions will now be handled gracefully.
+   Correct a memory leak that could potentially occur when using Cookies to implement server affinity in a multi-server configuration.
+   Introduce a global-level configuration parameter to allow administrators to set the size of the working buffer for handling requests and their response (request_buffer_size).
+
 */
 
 
@@ -78,7 +84,7 @@ Version 2.1.9 6 November 2020:
 extern int errno;
 #endif
 
-MGSYS                mg_system         = {0, 0, 0, 0, 0, "", "", "", NULL, NULL, NULL, NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, "", ""}};
+MGSYS                mg_system         = {0, 0, 0, 0, 0, 0, "", "", "", NULL, NULL, NULL, NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, "", ""}};
 static NETXSOCK      netx_so           = {0, 0, 0, 0, 0, 0, 0, {'\0'}};
 static DBXCON *      mg_connection     = NULL;
 
@@ -375,9 +381,9 @@ mg_web_process_failover:
    rc = mg_web_execute(pweb, pcon);
 /*
    {
-      char buffer[1024];
-      sprintf_s(buffer, 1000, "HTTP Response: rc=%d; len_used=%d;", rc, pweb->output_val.svalue.len_used);
-      mg_log_buffer(pweb->plog, pweb, pweb->output_val.svalue.buf_addr + 5, pweb->output_val.svalue.len_used - 5, buffer, 0);
+      char bufferx[1024];
+      sprintf(bufferx, "HTTP Response: rc=%d; len_used=%d;", rc, pweb->output_val.svalue.len_used);
+      mg_log_buffer(pweb->plog, pweb, pweb->output_val.svalue.buf_addr + 5, pweb->output_val.svalue.len_used - 5, bufferx, 0);
    }
 */
 
@@ -398,8 +404,14 @@ mg_web_process_failover:
          pweb->response_headers = (char *) MG_DEFAULT_HEADER;
          pweb->response_headers_len = (int) strlen(pweb->response_headers) + 4;
 
-         pweb->response_clen = (pweb->response_size - 5); /* 5 Byte offset (rno) */
-         get = (pweb->output_val.svalue.len_used - 10); /* 10 Byte offset (blen + rno) */
+         if (pweb->output_val.svalue.len_used > 10) {
+            pweb->response_clen = (pweb->response_size - 5); /* 5 Byte offset (rno) */
+            get = (pweb->output_val.svalue.len_used - 10); /* 10 Byte offset (blen + rno) */
+         }
+         else {
+            pweb->response_clen = 0;
+            get = 0;
+         }
       }
 
 /*
@@ -460,6 +472,15 @@ mg_web_process_failover:
    }
 
    if (rc != CACHE_SUCCESS) {
+
+      /* v2.1.10 */
+/*
+      {
+         char bufferx[1024];
+         sprintf(bufferx, "response: rc=%d; pweb->output_val.svalue.len_used=%d;", rc, (int) pweb->output_val.svalue.len_used);
+         mg_log_event(pweb->plog, pweb, (char *) bufferx, "Error from mg_web_execute", 0);
+      }
+*/
       if (pweb->output_val.svalue.len_used > 10) {
          pweb->response_clen = (pweb->output_val.svalue.len_used - 10);
          pweb->response_content = (char *) (pweb->output_val.svalue.buf_addr + 10);
@@ -475,7 +496,9 @@ mg_web_process_failover:
       mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
       get = pweb->response_clen;
       pweb->response_remaining = 0;
-      close_connection = 1;
+      if (pcon->net_connection) {
+         close_connection = 1;
+      }
    }
 
 /*
@@ -702,13 +725,17 @@ __try {
       mg_log_buffer(pweb->plog, pweb, pweb->input_buf.buf_addr, pweb->input_buf.len_used, "mg_web: request buffer", 0);
    }
 */
+   /* v2.1.10 */
 
    if (pcon->net_connection) {
       rc = netx_tcp_command(pcon, pweb, DBX_CMND_FUNCTION, 0);
    }
    else if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
-      ydb_string_t out, in1, in2, in3;
 
+      ydb_string_t out, in1, in2, in3;
+/*
+      ydb_buffer_t out, in1, in2, in3;
+*/
       pweb->failover_possible = 0;
       strcat(fun.label, "_zmgsis");
       fun.label_len = (int) strlen(label);
@@ -724,43 +751,82 @@ __try {
       in3.address = (char *) params;
       in3.length = (unsigned long) strlen(params);
 
-      DBX_LOCK(rc, 0);
+/*
+      out.buf_addr = (char *) pweb->output_val.svalue.buf_addr;
+      out.len_used = (unsigned long) 0;
+      out.len_alloc = (unsigned long) pweb->output_val.svalue.len_alloc;
+
+      in1.buf_addr = (char *) buffer;
+      in1.len_used = (unsigned long) strlen(buffer);
+      in1.len_alloc = in1.len_used + 1;
+
+      in2.buf_addr = (char *) netbuf;
+      in2.len_used = (unsigned long) netbuf_used;
+      in2.len_alloc = in2.len_used + 1;
+
+      in3.buf_addr = (char *) params;
+      in3.len_used = (unsigned long) strlen(params);
+      in3.len_alloc = in3.len_used + 1;
+*/
+      DBX_LOCK(0);
       rc = pcon->p_ydb_so->p_ydb_ci(fun.label, &out, &in1, &in2, &in3);
 
 /*
 {
    char bufferx[1024];
-   sprintf(bufferx, "mg_web_execute (YottaDB): rc=%d; len_used=%d; len_used=%d; out.length=%d;", rc,  pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, (int) out.length);
+   sprintf(bufferx, "mg_web_execute (YottaDB:ydb_string_t): rc=%d; len_used=%d; len_alloc=%d; out.length=%d;", rc,  pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, (int) out.length);
    mg_log_event(pweb->plog, pweb, bufferx, "mg_web_execute: YottaDB API", 0);
 }
 */
-//cmtxxx
+
+/*
+{
+   char bufferx[1024];
+   sprintf(bufferx, "mg_web_execute (YottaDB:ydb_buffer_t): rc=%d; len_used=%d; len_alloc=%d; out.len_used=%d;", rc,  (int) pweb->output_val.svalue.len_used, (int) pweb->output_val.svalue.len_alloc, (int) out.len_used);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web_execute: YottaDB API", 0);
+}
+*/
+
       if (rc == YDB_OK) {
 /*
          pweb->output_val.svalue.len_used = (unsigned int) mg_get_size((unsigned char *) pweb->output_val.svalue.buf_addr);
          pweb->response_size = (pweb->output_val.svalue.len_used - 5);
 */
+
          pweb->output_val.api_size = (unsigned int) out.length;
+/*
+         pweb->output_val.api_size = (unsigned int) out.len_used;
+*/
+
          pweb->output_val.svalue.len_used = pweb->output_val.api_size;
          pweb->response_size = (pweb->output_val.api_size - 5);
          pweb->response_remaining = 0;
       }
       else if (pcon->p_ydb_so->p_ydb_zstatus) {
          pcon->p_ydb_so->p_ydb_zstatus((ydb_char_t *) pcon->error, (ydb_long_t) 255);
+         /* mg_log_event(pweb->plog, pweb, pcon->error, "mg_web_execute: YottaDB API error text", 0); */
       }
 
-      DBX_UNLOCK(rc);
+      DBX_UNLOCK();
    }
    else {
       pweb->failover_possible = 0;
       strcpy(buffer, "");
 
-      DBX_LOCK(rc, 0);
+      DBX_LOCK(0);
       rc = pcon->p_isc_so->p_CachePushFunc(&(fun.rflag), (int) fun.label_len, (const Callin_char_t *) fun.label, (int) fun.routine_len, (const Callin_char_t *) fun.routine);
-      rc = pcon->p_isc_so->p_CachePushStr((int) strlen(buffer), (Callin_char_t *) buffer);
-      rc = pcon->p_isc_so->p_CachePushStr((int) netbuf_used, (Callin_char_t *) netbuf);
-      rc = pcon->p_isc_so->p_CachePushStr((int) strlen(params), (Callin_char_t *) params);
-      rc = pcon->p_isc_so->p_CacheExtFun(fun.rflag, 3);
+      if (rc == CACHE_SUCCESS) {
+         rc = pcon->p_isc_so->p_CachePushStr((int) strlen(buffer), (Callin_char_t *) buffer);
+         if (rc == CACHE_SUCCESS) {
+            rc = pcon->p_isc_so->p_CachePushStr((int) netbuf_used, (Callin_char_t *) netbuf);
+            if (rc == CACHE_SUCCESS) {
+               rc = pcon->p_isc_so->p_CachePushStr((int) strlen(params), (Callin_char_t *) params);
+               if (rc == CACHE_SUCCESS) {
+                  rc = pcon->p_isc_so->p_CacheExtFun(fun.rflag, 3);
+               }
+            }
+         }
+      }
 
       if (rc == CACHE_SUCCESS) {
          isc_pop_value(pcon, &(pweb->output_val), DBX_DTYPE_STR);
@@ -777,7 +843,10 @@ __try {
             pweb->response_remaining = 0;
          }
       }
-      DBX_UNLOCK(rc);
+      else {
+         mg_error_message(pcon, rc);
+      }
+      DBX_UNLOCK();
    }
 /*
 {
@@ -789,7 +858,9 @@ __try {
 
    if (rc != CACHE_SUCCESS) {
       rc = CACHE_NOCON;
-      strcpy(pcon->error, "Database connectivity error");
+      if (!pcon->error[0]) {
+         strcpy(pcon->error, "Database connectivity error");
+      }
       goto mg_web_execute_exit;
    }
 
@@ -842,7 +913,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 int mg_web_http_error(MGWEB *pweb, int http_status_code, int custompage)
 {
    char *custompage_url;
-   char buffer[32];
+   char buffer[64];
 
 #ifdef _WIN32
 __try {
@@ -868,7 +939,7 @@ __try {
    }
 
    sprintf(pweb->response_headers, "HTTP/1.1 %d Internal Server Error\r\nConnection: close", http_status_code);
-   if (pweb->response_clen) {
+   if (pweb->response_clen >= 0) {
       sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
    }
    else {
@@ -1162,6 +1233,9 @@ DBXCON * mg_obtain_connection(MGWEB *pweb)
    if (!pcon) {
       return NULL;
    }
+   pcon->error[0] = '\0';
+   pcon->error_code = 0;
+   pcon->error_no = 0;
 
 /*
    {
@@ -1350,7 +1424,7 @@ int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
 
    pcon->use_db_mutex = 1;
 
-   DBX_LOCK(rc, 0);
+   DBX_LOCK(0);
    if (pcon->psrv->dbtype != DBX_DBTYPE_YOTTADB) {
       rc = isc_open(pcon);
 
@@ -1371,7 +1445,7 @@ int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
          pcon->alloc = 0;
       }
    }
-   DBX_UNLOCK(rc);
+   DBX_UNLOCK();
 
    if (pcon->alloc)
       return CACHE_SUCCESS;
@@ -1415,9 +1489,9 @@ int mg_release_connection(MGWEB *pweb, DBXCON *pcon, int close_connection)
    }
    else {
       if (pcon->p_isc_so->loaded) {
-         DBX_LOCK(rc, 0);
+         DBX_LOCK(0);
          rc = pcon->p_isc_so->p_CacheEnd();
-         DBX_UNLOCK(rc);
+         DBX_UNLOCK();
       }
 
       strcpy(pcon->error, "");
@@ -1446,6 +1520,9 @@ MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen)
    MGWEB *pweb;
 
    len_alloc = 128000 + request_clen;
+   if (len_alloc < mg_system.request_buffer_size) { /* v2.1.10 */
+      len_alloc = mg_system.request_buffer_size;
+   }
 
    pweb = (MGWEB *) mg_malloc(NULL, sizeof(MGWEB) + (len_alloc + 32), 0);
    if (!pweb) {
@@ -1463,6 +1540,7 @@ MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen)
    pweb->output_val.svalue.len_used = pweb->input_buf.len_used;
    pweb->output_val.pnext = NULL;
    pweb->poutput_val_last = NULL;
+   pweb->request_cookie = NULL;
 
    pweb->evented = 0;
    pweb->wserver_chunks_response = 0;
@@ -1523,6 +1601,9 @@ int mg_release_request_memory(MGWEB *pweb)
       pvalnext = pval->pnext;
       mg_free(NULL, (void *) pval, 0);
       pval = pvalnext; 
+   }
+   if (pweb->request_cookie) { /* v2.1.10 */
+      mg_free(NULL, (void *) pweb->request_cookie, 0);
    }
 
    mg_free(pweb->pweb_server, pweb, 0);
@@ -2235,6 +2316,16 @@ __try {
                               mg_system.chunking = 1;
                            }
                         }
+                     }
+                  }
+                  else if (!strcmp(word[0], "request_buffer_size")) { /* 2.1.10 */
+                     if (wn > 1 && word[1]) {
+                        mg_lcase(word[1]);
+                        mg_system.request_buffer_size = (unsigned long) strtol(word[1], NULL, 10);
+                        if (strstr(word[1], "k"))
+                           mg_system.request_buffer_size *= 1000;
+                        else if (strstr(word[1], "m"))
+                           mg_system.request_buffer_size *= 1000000;
                      }
                   }
                   else if (!strcmp(word[0], "custompage_dbserver_unavailable") && wn > 1) { /* 2.0.8 */
@@ -4825,9 +4916,9 @@ int mg_cleanup(DBXCON *pcon, MGWEB *pweb)
    }
    else {
       if (pweb->output_val.cvalue.pstr) {
-         DBX_LOCK(rc, 0);
+         DBX_LOCK(0);
          pcon->p_isc_so->p_CacheExStrKill(&(pweb->output_val.cvalue.zstr));
-         DBX_UNLOCK(rc);
+         DBX_UNLOCK();
          pweb->output_val.cvalue.pstr = NULL;
       }
    }

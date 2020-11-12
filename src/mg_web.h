@@ -21,7 +21,7 @@
    | distributed under the License is distributed on an "AS IS" BASIS,        |
    | WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. |
    | See the License for the specific language governing permissions and      |
-   | limitations under the License.                                           |      
+   | limitations under the License.                                           |
    |                                                                          |
    ----------------------------------------------------------------------------
 */
@@ -355,12 +355,23 @@ typedef int    xc_status_t;
 #define DBX_MEMCPY(a,b,c)           memcpy(a,b,c)
 #endif
 
-#define DBX_LOCK(RC, TIMEOUT) \
+
+#define DBX_LOCK(TIMEOUT) \
+   if (pcon->use_db_mutex) { \
+      mg_mutex_lock(pcon->p_db_mutex, TIMEOUT); \
+   } \
+
+#define DBX_LOCK_EX(RC, TIMEOUT) \
    if (pcon->use_db_mutex) { \
       RC = mg_mutex_lock(pcon->p_db_mutex, TIMEOUT); \
    } \
 
-#define DBX_UNLOCK(RC) \
+#define DBX_UNLOCK() \
+   if (pcon->use_db_mutex) { \
+      mg_mutex_unlock(pcon->p_db_mutex); \
+   } \
+
+#define DBX_UNLOCK_EX(RC) \
    if (pcon->use_db_mutex) { \
       RC = mg_mutex_unlock(pcon->p_db_mutex); \
    } \
@@ -1108,6 +1119,7 @@ typedef struct tagMGSYS {
    int            timeout;
    unsigned long  requestno;
    unsigned long  chunking;
+   unsigned long  request_buffer_size;
    char           module_file[256];
    char           config_file[256];
    char           config_error[512];
