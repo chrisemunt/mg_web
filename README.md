@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-6 November 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+12 November 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.1; Revision 9.
+* Current Release: Version: 2.1; Revision 10.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -174,3 +174,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 		* **server\_affinity** variable:[variable(s)] cookie:[name]
 * Correct a fault that led to response payloads being truncated when connecting to YottaDB via its API.
 
+### v2.1.10 (12 November 2020)
+
+* Correct a fault that led to web server worker processes crashing if an error occurred while processing a request via a DB Server API.  Such error conditions will now be handled gracefully and an appropriate HTTP error code returned to the client.
+* Correct a memory leak that could potentially occur when using Cookies to implement server affinity in a multi-server configuration.
+* Introduce a global-level configuration parameter to allow administrators to set the size of the working buffer for handling requests and their response (parameter: **request\_buffer\_size**).
