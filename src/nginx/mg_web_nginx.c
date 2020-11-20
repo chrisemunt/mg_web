@@ -25,8 +25,10 @@
    ----------------------------------------------------------------------------
 */
 
+/*
 #include <stdio.h>
 #include <time.h>
+*/
 
 #include <ngx_config.h>
 #include <ngx_core.h>
@@ -47,6 +49,7 @@
 #define MG_FILE_TYPES         ".mgw.mgweb."
 #define MG_DEFAULT_TIMEOUT    300000
 #define MG_RBUFFER_SIZE       1024
+
 /*
 #define MG_API_TRACE          1
 */
@@ -60,16 +63,14 @@ typedef struct {
    char  mg_config_file[256];
    char  mg_log_file[256];
    char  mg_thread_pool[64];
-} mg_conf_main;
-
+} ngx_http_mg_web_main_conf_t;
 
 typedef struct {
    int   n;
    char  mg_config_file[256];
    char  mg_log_file[256];
    char  mg_thread_pool[64];
-} mg_conf_server;
-
+} ngx_http_mg_web_srv_conf_t;
 
 typedef struct {
    short mg_enabled;
@@ -77,23 +78,22 @@ typedef struct {
    char  mg_config_file[256];
    char  mg_log_file[256];
    char  mg_thread_pool[64];
-} mg_conf_location;
-
+} ngx_http_mg_web_loc_conf_t;
 
 typedef struct tagMGWEBNGINX {
-   ngx_http_request_t   *r;
-   mg_conf_main         *mconf;
-   mg_conf_server       *sconf;
-   mg_conf_location     *dconf;
-   ngx_buf_t            *output_buf_last;
-   ngx_chain_t          *output_head;
-   ngx_chain_t          *output_last;
-   unsigned int         more_request_content;
-   ngx_str_t            thread_pool;
-   char                 mg_thread_pool[64];
-   int                  async;
-   DBXMUTEX             wsmutex;
-   MGWEB                *pweb;
+   ngx_http_request_t            *r;
+   ngx_http_mg_web_main_conf_t   *mconf;
+   ngx_http_mg_web_srv_conf_t    *sconf;
+   ngx_http_mg_web_loc_conf_t    *dconf;
+   ngx_buf_t                     *output_buf_last;
+   ngx_chain_t                   *output_head;
+   ngx_chain_t                   *output_last;
+   unsigned int                  more_request_content;
+   ngx_str_t                     thread_pool;
+   char                          mg_thread_pool[64];
+   int                           async;
+   DBXMUTEX                      wsmutex;
+   MGWEB                         *pweb;
 } MGWEBNGINX, *LPWEBNGINX;
 
 
@@ -106,12 +106,8 @@ typedef struct {
 }
 #endif
 
-/*
- * Declare ourselves so the configuration routines can find and know us.
- * We'll fill it in at the end of the module.
- */
 
-static ngx_int_t     mg_handler                 (ngx_http_request_t *r);
+static ngx_int_t     ngx_http_mg_web_handler    (ngx_http_request_t *r);
 static void          mg_payload_handler         (ngx_http_request_t *r);
 static int           mg_execute                 (ngx_http_request_t *r, MGWEBNGINX *pwebnginx);
 static int           mg_execute_launch_thread   (MGWEBNGINX *pwebnginx);
@@ -154,29 +150,10 @@ int                  mg_websocket_accept_key    (MGWEB *pweb, char * sec_websock
 
 #if defined(MG_API_TRACE)
 #if defined(_WIN32)
-static DBXLOG debug_log = {"c:/temp/mgweb.log", "", "", 0, 0, 0, 0, 0, "", ""};
+static DBXLOG debug_log = {"c:/temp/mgweb.log", "", "", 0, 0, 0, 0, 0, 0, "", ""};
 #else
-static DBXLOG debug_log = {"/tmp/mgweb.log", "", "", 0, 0, 0, 0, 0, "", ""};
+static DBXLOG debug_log = {"/tmp/mgweb.log", "", "", 0, 0, 0, 0, 0, 0, "", ""};
 #endif
-#endif
-
-#if defined(_WIN32)
-BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
-{
-   switch (fdwReason)
-   { 
-      case DLL_PROCESS_ATTACH:
-         GetModuleFileName((HMODULE) hinstDLL, mg_system.module_file, 250);
-         break;
-      case DLL_THREAD_ATTACH:
-         break;
-      case DLL_THREAD_DETACH:
-         break;
-      case DLL_PROCESS_DETACH:
-         break;
-   }
-   return TRUE;
-}
 #endif
 
 
@@ -194,7 +171,13 @@ static ngx_http_module_t  ngx_http_mg_web_ctx = {
    mg_merge_location_conf     /* merge location configuration */
 };
 
-ngx_module_t  ngx_http_mg_web;
+
+/*
+ * Declare ourselves so the configuration routines can find and know us.
+ * We'll fill it in at the end of the module.
+ */
+
+ngx_module_t  ngx_http_mg_web_module;
 
 static ngx_command_t  ngx_http_mg_web_commands[] = {
    {
@@ -243,7 +226,7 @@ static ngx_command_t  ngx_http_mg_web_commands[] = {
 };
 
 
-ngx_module_t  ngx_http_mg_web = {
+ngx_module_t  ngx_http_mg_web_module = {
    NGX_MODULE_V1,
    &ngx_http_mg_web_ctx,      /* module context */
    ngx_http_mg_web_commands,  /* module directives */
@@ -259,22 +242,53 @@ ngx_module_t  ngx_http_mg_web = {
 };
 
 
+#if defined(_WIN32)
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
+{
+   switch (fdwReason)
+   { 
+      case DLL_PROCESS_ATTACH:
+         GetModuleFileName((HMODULE) hinstDLL, mg_system.module_file, 250);
+         break;
+      case DLL_THREAD_ATTACH:
+         break;
+      case DLL_THREAD_DETACH:
+         break;
+      case DLL_PROCESS_DETACH:
+         break;
+   }
+   return TRUE;
+}
+#endif
+
+
 /* Main content handler for MGWEB requests */
 
-static ngx_int_t mg_handler(ngx_http_request_t *r)
+static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
 {
    int n, clen, ok;
    int rc;
    char ext[16];
-   mg_conf_location *dconf;
+   ngx_http_mg_web_loc_conf_t *dconf;
    MGWEB *pweb;
    MGWEBNGINX *pwebnginx;
 
 #if defined(MG_API_TRACE)
-   ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "mg_web: mg_handler()");
+   ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "mg_web: ngx_http_mg_web_handler()");
 #endif
 
-   dconf = ngx_http_get_module_loc_conf(r, ngx_http_mg_web);
+/*
+   {
+      char bufferx[256];
+      sprintf(bufferx, "r->uri.len=%d;", r->uri.len);
+      mg_log_event(&debug_log, NULL, bufferx, "mg_payload_handler: ngx_http_mg_web_handler", 0);
+      sprintf(bufferx, "r->uri.data=%s;", (char *) r->uri.data);
+      mg_log_event(&debug_log, NULL, bufferx, "mg_payload_handler: ngx_http_mg_web_handler", 0);
+      return NGX_DECLINED;
+   }
+*/
+
+   dconf = ngx_http_get_module_loc_conf(r, ngx_http_mg_web_module);
    ext[0] = '\0';
    if (r->uri.len > 3) {
       for (n = r->uri.len - 1; n > 1; n --) {
@@ -301,7 +315,7 @@ static ngx_int_t mg_handler(ngx_http_request_t *r)
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
    }
 
-   ngx_http_set_ctx(r, pwebnginx, ngx_http_mg_web);
+   ngx_http_set_ctx(r, pwebnginx, ngx_http_mg_web_module);
    pwebnginx->r = r;
 
    pweb = (MGWEB *) ngx_pcalloc(r->pool, sizeof(MGWEB) + 128100);
@@ -375,7 +389,7 @@ static void mg_payload_handler(ngx_http_request_t *r)
    MGWEBNGINX *pwebnginx;
    MGWEB *pweb;
 
-   pwebnginx = ngx_http_get_module_ctx(r, ngx_http_mg_web);
+   pwebnginx = ngx_http_get_module_ctx(r, ngx_http_mg_web_module);
    pweb = pwebnginx->pweb;
 
    /* More request content */
@@ -619,7 +633,7 @@ static char * mg_param_mgweb(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
    char *p;
    char buffer[256];
    ngx_str_t *value;
-   mg_conf_location *dconf = conf;
+   ngx_http_mg_web_loc_conf_t *dconf = conf;
    ngx_http_core_loc_conf_t  *clcf;
 
 #if defined(MG_API_TRACE)
@@ -640,7 +654,7 @@ static char * mg_param_mgweb(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
    }
 
    clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
-   clcf->handler = mg_handler;
+   clcf->handler = ngx_http_mg_web_handler;
 
    return NGX_CONF_OK;
 }
@@ -652,7 +666,7 @@ static char * mg_param_mgwebfiletypes(ngx_conf_t *cf, ngx_command_t *cmd, void *
    char *p;
    char buffer[256];
    ngx_str_t *value;
-   mg_conf_location *dconf = conf;
+   ngx_http_mg_web_loc_conf_t *dconf = conf;
    ngx_http_core_loc_conf_t  *clcf;
 
 #if defined(MG_API_TRACE)
@@ -683,7 +697,7 @@ static char * mg_param_mgwebfiletypes(ngx_conf_t *cf, ngx_command_t *cmd, void *
    }
 
    clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
-   clcf->handler = mg_handler;
+   clcf->handler = ngx_http_mg_web_handler;
 
    return NGX_CONF_OK;
 }
@@ -693,7 +707,7 @@ static char * mg_param_mgwebconfigfile(ngx_conf_t *cf, ngx_command_t *cmd, void 
 {
    char *p;
    ngx_str_t *value;
-   mg_conf_main *dconf = conf;
+   ngx_http_mg_web_main_conf_t *dconf = conf;
    ngx_http_core_loc_conf_t  *clcf;
 
 #if defined(MG_API_TRACE)
@@ -710,7 +724,7 @@ static char * mg_param_mgwebconfigfile(ngx_conf_t *cf, ngx_command_t *cmd, void 
    }
 
    clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
-   clcf->handler = mg_handler;
+   clcf->handler = ngx_http_mg_web_handler;
 
    return NGX_CONF_OK;
 }
@@ -720,7 +734,7 @@ static char * mg_param_mgweblogfile(ngx_conf_t *cf, ngx_command_t *cmd, void *co
 {
    char *p;
    ngx_str_t *value;
-   mg_conf_main *dconf = conf;
+   ngx_http_mg_web_main_conf_t *dconf = conf;
    ngx_http_core_loc_conf_t  *clcf;
 
 #if defined(MG_API_TRACE)
@@ -737,7 +751,7 @@ static char * mg_param_mgweblogfile(ngx_conf_t *cf, ngx_command_t *cmd, void *co
    }
 
    clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
-   clcf->handler = mg_handler;
+   clcf->handler = ngx_http_mg_web_handler;
 
    return NGX_CONF_OK;
 }
@@ -747,7 +761,7 @@ static char * mg_param_mgwebthreadpool(ngx_conf_t *cf, ngx_command_t *cmd, void 
 {
    char *p;
    ngx_str_t *value;
-   mg_conf_location *dconf = conf;
+   ngx_http_mg_web_loc_conf_t *dconf = conf;
    ngx_http_core_loc_conf_t  *clcf;
 
 
@@ -782,7 +796,7 @@ static char * mg_param_mgwebthreadpool(ngx_conf_t *cf, ngx_command_t *cmd, void 
    }
 
    clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
-   clcf->handler = mg_handler;
+   clcf->handler = ngx_http_mg_web_handler;
 
    return NGX_CONF_OK;
 }
@@ -814,7 +828,7 @@ static ngx_int_t mg_post_conf(ngx_conf_t *cf)
       return NGX_ERROR;
    }
 
-   *h = mg_handler;
+   *h = ngx_http_mg_web_handler;
 
    return NGX_OK;
 }
@@ -822,13 +836,13 @@ static ngx_int_t mg_post_conf(ngx_conf_t *cf)
 
 static void * mg_create_main_conf(ngx_conf_t *cf)
 {
-   mg_conf_main *conf;
+   ngx_http_mg_web_main_conf_t *conf;
 
 #if defined(MG_API_TRACE)
    mg_log_event(&debug_log, NULL, "mg_web: mg_create_main_conf()", "mg_web: trace", 0);
 #endif
 
-   conf = ngx_pcalloc(cf->pool, sizeof(mg_conf_main));
+   conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_mg_web_main_conf_t));
    if (conf == NULL) {
       return NGX_CONF_ERROR;
    }
@@ -861,13 +875,13 @@ char * mg_init_main_conf(ngx_conf_t *cf, void *conf)
 
 static void * mg_create_server_conf(ngx_conf_t *cf)
 {
-   mg_conf_server *conf;
+   ngx_http_mg_web_srv_conf_t *conf;
 
 #if defined(MG_API_TRACE)
    mg_log_event(&debug_log, NULL, "mg_web: mg_create_server_conf()", "mg_web: trace", 0);
 #endif
 
-   conf = ngx_pcalloc(cf->pool, sizeof(mg_conf_server));
+   conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_mg_web_srv_conf_t));
    if (conf == NULL) {
       return NGX_CONF_ERROR;
    }
@@ -901,13 +915,13 @@ static char * mg_merge_server_conf(ngx_conf_t *cf, void *parent, void *child)
 
 static void * mg_create_location_conf(ngx_conf_t *cf)
 {
-   mg_conf_location *conf;
+   ngx_http_mg_web_loc_conf_t *conf;
 
 #if defined(MG_API_TRACE)
    mg_log_event(&debug_log, NULL, "mg_web: mg_create_location_conf()", "mg_web: trace", 0);
 #endif
 
-   conf = ngx_pcalloc(cf->pool, sizeof(mg_conf_location));
+   conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_mg_web_loc_conf_t));
    if (conf == NULL) {
       return NGX_CONF_ERROR;
    }
@@ -962,13 +976,13 @@ void mg_master_exit(ngx_cycle_t *cycle)
 
 ngx_int_t mg_module_init(ngx_cycle_t *cycle)
 {
-   mg_conf_main  *pmain;
+   ngx_http_mg_web_main_conf_t  *pmain;
 
 #if defined(MG_API_TRACE)
    mg_log_event(&debug_log, NULL, "mg_web: mg_module_init()", "mg_web: trace", 0);
 #endif
 
-   pmain = (mg_conf_main *) ngx_http_cycle_get_module_main_conf(cycle, ngx_http_mg_web);
+   pmain = (ngx_http_mg_web_main_conf_t *) ngx_http_cycle_get_module_main_conf(cycle, ngx_http_mg_web_module);
 
    if (pmain) {
       strcpy(mg_system.config_file, pmain->mg_config_file);
