@@ -72,6 +72,9 @@ Version 2.1.10 12 November 2020:
    Correct a memory leak that could potentially occur when using Cookies to implement server affinity in a multi-server configuration.
    Introduce a global-level configuration parameter to allow administrators to set the size of the working buffer for handling requests and their response (request_buffer_size).
 
+Version 2.1.11 20 November 2020:
+   Correct a fault that led to mg_web not working correctly under Nginx on the Raspberry Pi.
+
 */
 
 
@@ -94,6 +97,10 @@ static MGPATH *      mg_path           = NULL;
 MG_MALLOC            mg_ext_malloc     = NULL;
 MG_REALLOC           mg_ext_realloc    = NULL;
 MG_FREE              mg_ext_free       = NULL;
+
+static DBXISCSO *    mg_isc_so_global  = NULL;
+static DBXYDBSO *    mg_ydb_so_global  = NULL;
+static DBXGTMSO *    mg_gtm_so_global  = NULL;
 
 #if defined(_WIN32)
 CRITICAL_SECTION     mg_global_mutex;
@@ -1969,7 +1976,32 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 int mg_worker_exit()
 {
+   int rc;
+   char title[128], buffer[128];
+
+   rc = CACHE_SUCCESS;
+   strcpy(title, "mg_web: web server worker closing");
+   sprintf(buffer, "exit status code: %d", rc);
+   if (mg_ydb_so_global) {
+      rc = mg_ydb_so_global->p_ydb_exit();
+      mg_ydb_so_global = NULL;
+      sprintf(buffer, "YottaDB process exit status code: %d", rc);
+   }
+   if (mg_gtm_so_global) {
+      rc = mg_gtm_so_global->p_gtm_exit();
+      mg_gtm_so_global = NULL;
+      sprintf(buffer, "GTM process exit status code: %d", rc);
+   }
+   if (mg_isc_so_global) {
+      rc = mg_isc_so_global->p_CacheEnd();
+      mg_isc_so_global = NULL;
+      sprintf(buffer, "ISC process exit status code: %d", rc);
+   }
+
+   mg_log_event(&(mg_system.log), NULL, buffer, title, 0);
+
    mg_delete_critical_section((void *) &mg_global_mutex);
+
    return 0;
 }
 
@@ -3263,6 +3295,7 @@ int isc_open(DBXCON *pcon)
    }
    else {
       pcon->p_isc_so->loaded = 2;
+      mg_isc_so_global = pcon->p_isc_so;
       rc = CACHE_SUCCESS;
    }
 
@@ -3833,6 +3866,7 @@ int ydb_open(DBXCON *pcon)
    if (rc == CACHE_SUCCESS) {
       ydb_parse_zv(data.buf_addr, &(pcon->zv));
       sprintf(pcon->p_zv->version, "%d.%d.b%d", pcon->p_zv->majorversion, pcon->p_zv->minorversion, pcon->p_zv->mg_build);
+      mg_ydb_so_global = pcon->p_ydb_so;
    }
 
 ydb_open_exit:
