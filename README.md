@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-20 November 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+23 November 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.1; Revision 11.
+* Current Release: Version: 2.1; Revision 12.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -183,3 +183,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.1.11 (20 November 2020)
 
 * Correct a fault that led to **mg\_web** not working correctly under Nginx on the Raspberry Pi.
+
+### v2.1.12 (23 November 2020)
+
+* Ensure that API bindings to the DB Server are gracefully closed when the web server terminates the hosting worker process.  This correction does not affect configurations using network based connectivity between **mg\_web** and the DB Server.
