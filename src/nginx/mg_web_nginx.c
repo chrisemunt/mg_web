@@ -4,7 +4,7 @@
    | Description: Nginx HTTP Gateway for InterSystems Cache/IRIS and YottaDB  |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2020 M/Gateway Developments Ltd,                      |
+   | Copyright (c) 2019-2021 M/Gateway Developments Ltd,                      |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -1697,7 +1697,7 @@ int mg_websocket_init(MGWEB *pweb)
 /*
 {
    char bufferx[256];
-   sprintf(bufferx, "debug: websocket startup netx_tcp_read len=%d;", len);
+   sprintf(bufferx, "debug: websocket startup mg_websocket_init len=%d;", len);
    mg_log_buffer(pweb->plog, pweb, header, len, bufferx, 0);
 }
 */
