@@ -4,7 +4,7 @@
    | Description: Apache HTTP Gateway for InterSystems Cache/IRIS and YottaDB |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2020 M/Gateway Developments Ltd,                      |
+   | Copyright (c) 2019-2021 M/Gateway Developments Ltd,                      |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -1704,7 +1704,7 @@ size_t mg_websocket_write_block(MGWEB *pweb, int type, unsigned char *buffer, si
 /*
 {
    char bufferx[256];
-   sprintf(bufferx, "websocket netx_tcp_read payload_length=%llu; pos=%d; obb=%p; pweb->pwsock->closing=%d", payload_length, pos, pwebapache->obb, pweb->pwsock->closing);
+   sprintf(bufferx, "websocket mg_websocket_write_block payload_length=%llu; pos=%d; obb=%p; pweb->pwsock->closing=%d", payload_length, pos, pwebapache->obb, pweb->pwsock->closing);
    mg_log_buffer(pweb->plog, pweb, header, pos, bufferx, 0);
 }
 */
@@ -1716,7 +1716,7 @@ size_t mg_websocket_write_block(MGWEB *pweb, int type, unsigned char *buffer, si
 /*
 {
    char bufferx[256];
-   sprintf(bufferx, "websocket netx_tcp_read payload_length=%llu; pos=%d", payload_length, pos);
+   sprintf(bufferx, "websocket mg_websocket_write_block payload_length=%llu; pos=%d", payload_length, pos);
    mg_log_buffer(pweb->plog, pweb, header, pos, bufferx, 0);
 }
 */
