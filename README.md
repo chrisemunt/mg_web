@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-23 November 2020, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+29 January 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.1; Revision 12.
+* Current Release: Version: 2.1; Revision 13.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -104,11 +104,10 @@ Full documentation for building, deploying and using **mg\_web** will be found i
 ## Things for the future...
 
 * The ability to handle request payloads that exceed the maximum DB Server string size.
-* The ability to specify more than one DB Server per web path for the purpose of fail-over in the event of the primary DB Server becoming unavailable.
 
 ## License
 
-Copyright (c) 2019-2020 M/Gateway Developments Ltd,
+Copyright (c) 2019-2021 M/Gateway Developments Ltd,
 Surrey UK.                                                      
 All rights reserved.
  
@@ -187,3 +186,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.1.12 (23 November 2020)
 
 * Ensure that API bindings to the DB Server are gracefully closed when the web server terminates the hosting worker process.  This correction does not affect configurations using network based connectivity between **mg\_web** and the DB Server.
+
+### v2.1.13 (29 January 2021)
+
+* Improved error reporting (to the event log).
+* Miscellaneous minor bug fixes. 
