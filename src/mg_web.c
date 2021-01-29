@@ -4,7 +4,7 @@
    | Description: HTTP Gateway for InterSystems Cache/IRIS and YottaDB        |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2020 M/Gateway Developments Ltd,                      |
+   | Copyright (c) 2019-2021 M/Gateway Developments Ltd,                      |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -75,6 +75,14 @@ Version 2.1.10 12 November 2020:
 Version 2.1.11 20 November 2020:
    Correct a fault that led to mg_web not working correctly under Nginx on the Raspberry Pi.
 
+Version 2.1.12 23 November 2020:
+   Ensure that API bindings to the DB Server are gracefully closed when the web server terminates the hosting worker process.
+      This correction does not affect configurations using network based connectivity between mg_web and the DB Server.
+
+Version 2.1.13 29 January 2021:
+   Improved error reporting (to the event log).
+      Miscellaneous minor bug fixes.
+
 */
 
 
@@ -87,7 +95,7 @@ Version 2.1.11 20 November 2020:
 extern int errno;
 #endif
 
-MGSYS                mg_system         = {0, 0, 0, 0, 0, 0, "", "", "", NULL, NULL, NULL, NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, "", ""}};
+MGSYS                mg_system         = {0, 0, 0, 0, 0, 0, "", "", "", "", NULL, NULL, NULL, NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, "", ""}};
 static NETXSOCK      netx_so           = {0, 0, 0, 0, 0, 0, 0, {'\0'}};
 static DBXCON *      mg_connection     = NULL;
 
@@ -181,7 +189,7 @@ __try {
       mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
       MG_LOG_RESPONSE_HEADER(pweb);
       mg_submit_headers(pweb);
-      mg_log_event(pweb->plog, pweb, "No valid SERVER configuration found", "mg_web: error", 0);
+      mg_log_event(pweb->plog, pweb, "No valid DB SERVER configuration found", "mg_web: error", 0);
       return CACHE_FAILURE;
    }
 /*
@@ -283,7 +291,6 @@ int mg_web_process(MGWEB *pweb)
    int rc, len, get, get1, close_connection, failover_no;
    unsigned char *p;
    char buffer[256];
-   DBXCON *pcon;
    DBXVAL *pval;
 
 #ifdef _WIN32
@@ -335,29 +342,31 @@ __try {
 
 mg_web_process_failover:
 
-   pcon = mg_obtain_connection(pweb);
+   rc = mg_obtain_connection(pweb);
 
-   if (!pcon) {
-      mg_log_event(pweb->plog, pweb, "Unable to allocate memory for a new connection", "mg_web: error", 0);
+   if (rc == CACHE_FAILURE) { /* v2.1.13 */
+      if (!pweb->error[0]) {
+         strcpy(pweb->error, "Cannot connect to DB Server");
+      }
+      mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
+
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
       mg_web_http_error(pweb, 503, MG_CUSTOMPAGE_DBSERVER_BUSY);
       MG_LOG_RESPONSE_HEADER(pweb);
       mg_submit_headers(pweb);
+
       return 0;
    }
-   if (!pcon->alloc) {
-
-      if (pcon->error[0]) {
-         mg_log_event(pweb->plog, pweb, pcon->error, "mg_web: connectivity error", 0);
+   if (rc != CACHE_SUCCESS) {
+      if (!pweb->error[0]) {
+         strcpy(pweb->error, "Cannot connect to DB Server");
       }
-      else {
-         mg_log_event(pweb->plog, pweb, "Cannot connect to DB Server", "mg_web: connectivity error", 0);
-      }
+      mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
 
       mg_server_offline(pweb, pweb->psrv, 0);
       if (pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no) {
-         sprintf(pcon->error, "Cannot connect to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
-         mg_log_event(pweb->plog, pweb, pcon->error, "mg_web: connectivity error", 0);
+         sprintf(pweb->error, "Cannot connect to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
+         mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
          failover_no ++;
          goto mg_web_process_failover;
       }
@@ -385,7 +394,7 @@ mg_web_process_failover:
    }
 */
 
-   rc = mg_web_execute(pweb, pcon);
+   rc = mg_web_execute(pweb);
 /*
    {
       char bufferx[1024];
@@ -468,11 +477,11 @@ mg_web_process_failover:
          pweb->response_headers_len += len;
       }
    }
-   else {
+   else { /* v2.1.13 */
       mg_server_offline(pweb, pweb->psrv, 0);
       if (pweb->failover_possible && pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no) {
-         sprintf(pcon->error, "Cannot send request to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
-         mg_log_event(pweb->plog, pweb, pcon->error, "mg_web: connectivity error", 0);
+         sprintf(pweb->error, "Cannot send request to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
+         mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
          failover_no ++;
          goto mg_web_process_failover;
       }
@@ -493,17 +502,17 @@ mg_web_process_failover:
          pweb->response_content = (char *) (pweb->output_val.svalue.buf_addr + 10);
       }
       pweb->response_headers = (char *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4));
-      if (pcon->error[0]) {
-         pweb->response_content = (char *) pcon->error;
-         pweb->response_clen = (int) strlen(pcon->error);
+      if (pweb->error[0]) {
+         pweb->response_content = (char *) pweb->error;
+         pweb->response_clen = (int) strlen(pweb->error);
          if (mg_system.log.log_errors) {
-            mg_log_event(&(mg_system.log), pweb, pcon->error, "mg_web: error", 0);
+            mg_log_event(&(mg_system.log), pweb, pweb->error, "mg_web: error", 0);
          }
       }
       mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
       get = pweb->response_clen;
       pweb->response_remaining = 0;
-      if (pcon->net_connection) {
+      if (pweb->pcon->net_connection) {
          close_connection = 1;
       }
    }
@@ -519,7 +528,6 @@ mg_web_process_failover:
    MG_LOG_RESPONSE_HEADER(pweb);
 
    if (pweb->pwsock) {
-      pweb->pcon = pcon;
       rc = mg_websocket_connection(pweb);
       rc = mg_websocket_disconnect(pweb);
       return rc;
@@ -539,7 +547,7 @@ mg_web_process_failover:
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
-            strncpy(pweb->response_content, buffer, len);
+            strcpy(pweb->response_content, buffer);
          }
          MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
          mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
@@ -570,7 +578,7 @@ mg_web_process_failover:
 */
       if (pweb->response_streamed) {
          pweb->output_val.svalue.len_used = 0;
-         rc = netx_tcp_read_stream(pcon, pweb);
+         rc = netx_tcp_read_stream(pweb);
          get = pweb->output_val.svalue.len_used;
          pweb->response_content = pweb->output_val.svalue.buf_addr;
          if (pweb->wserver_chunks_response == 0) {
@@ -578,7 +586,7 @@ mg_web_process_failover:
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
-            strncpy(pweb->response_content, buffer, len);
+            strcpy(pweb->response_content, buffer);
             if (pweb->response_remaining == 0) {
                strcpy(pweb->response_content + get, "\r\n0\r\n\r\n");
                get += 7;
@@ -599,7 +607,7 @@ mg_web_process_failover:
             if (get > (int) pweb->output_val.svalue.len_alloc) {
                get = pweb->output_val.svalue.len_alloc;
             }
-            netx_tcp_read(pcon, (unsigned char *) pweb->output_val.svalue.buf_addr, get, pcon->timeout, 1);
+            netx_tcp_read(pweb, (unsigned char *) pweb->output_val.svalue.buf_addr, get, pweb->pcon->timeout, 1);
             MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->output_val.svalue.buf_addr, get);
             mg_client_write(pweb, (unsigned char *) pweb->output_val.svalue.buf_addr, (int) get);
             pweb->response_remaining -= get;
@@ -607,8 +615,8 @@ mg_web_process_failover:
       }
    }
 
-   mg_cleanup(pcon, pweb);
-   mg_release_connection(pweb, pcon, close_connection);
+   mg_cleanup(pweb);
+   mg_release_connection(pweb, close_connection);
 
    return rc;
 
@@ -692,18 +700,20 @@ int mg_parse_headers(MGWEB *pweb)
 }
 
 
-int mg_web_execute(MGWEB *pweb, DBXCON *pcon)
+int mg_web_execute(MGWEB *pweb)
 {
    int rc, len, get;
    unsigned long offset, netbuf_used;
    unsigned char *netbuf;
    char label[16], routine[16], params[9], buffer[8];
    DBXFUN fun;
+   DBXCON *pcon;
 
 #ifdef _WIN32
 __try {
 #endif
 
+   pcon = pweb->pcon;
    rc = CACHE_SUCCESS;
    offset = 5;
 
@@ -735,7 +745,7 @@ __try {
    /* v2.1.10 */
 
    if (pcon->net_connection) {
-      rc = netx_tcp_command(pcon, pweb, DBX_CMND_FUNCTION, 0);
+      rc = netx_tcp_command(pweb, DBX_CMND_FUNCTION, 0);
    }
    else if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
 
@@ -810,8 +820,8 @@ __try {
          pweb->response_remaining = 0;
       }
       else if (pcon->p_ydb_so->p_ydb_zstatus) {
-         pcon->p_ydb_so->p_ydb_zstatus((ydb_char_t *) pcon->error, (ydb_long_t) 255);
-         /* mg_log_event(pweb->plog, pweb, pcon->error, "mg_web_execute: YottaDB API error text", 0); */
+         pcon->p_ydb_so->p_ydb_zstatus((ydb_char_t *) pweb->error, (ydb_long_t) 255);
+         /* mg_log_event(pweb->plog, pweb, pweb->error, "mg_web_execute: YottaDB API error text", 0); */
       }
 
       DBX_UNLOCK();
@@ -851,7 +861,7 @@ __try {
          }
       }
       else {
-         mg_error_message(pcon, rc);
+         mg_error_message(pweb, rc);
       }
       DBX_UNLOCK();
    }
@@ -865,8 +875,8 @@ __try {
 
    if (rc != CACHE_SUCCESS) {
       rc = CACHE_NOCON;
-      if (!pcon->error[0]) {
-         strcpy(pcon->error, "Database connectivity error");
+      if (!pweb->error[0]) {
+         strcpy(pweb->error, "Database connectivity error");
       }
       goto mg_web_execute_exit;
    }
@@ -886,8 +896,8 @@ __try {
 
    if (pweb->output_val.sort == DBX_DSORT_EOD || pweb->output_val.sort == DBX_DSORT_ERROR) {
       rc = CACHE_FAILURE;
-      strncpy(pcon->error, pweb->output_val.svalue.buf_addr + offset, len);
-      pcon->error[len] = '\0';
+      strncpy(pweb->error, pweb->output_val.svalue.buf_addr + offset, len);
+      pweb->error[len] = '\0';
       goto mg_web_execute_exit;
    }
 
@@ -1151,7 +1161,7 @@ int mg_add_cgi_variable(MGWEB *pweb, char *name, int name_len, char *value, int 
 }
 
 
-DBXCON * mg_obtain_connection(MGWEB *pweb)
+int mg_obtain_connection(MGWEB *pweb)
 {
    int rc, use_existing;
    DBXCON *pcon, *pcon_last, *pcon_free;
@@ -1167,12 +1177,12 @@ DBXCON * mg_obtain_connection(MGWEB *pweb)
 
    mg_enter_critical_section((void *) &mg_global_mutex);
 
-   if (pweb->server_no >= 0 && pweb->server_no < 32) {
-      if (ppath->psrv[pweb->server_no] && ppath->psrv[pweb->server_no]->offline == 0) {
+   if (pweb->server_no >= 0 && pweb->server_no < 32) { /* server affinity as server number pre-defined */
+      if (pweb->server_no < ppath->srv_max && ppath->psrv[pweb->server_no] && ppath->psrv[pweb->server_no]->offline == 0) { /* check server in range and online */
          psrv = ppath->psrv[pweb->server_no];
       }
       else {
-         pweb->server_no = -1;
+         pweb->server_no = -1; /* preferred server not available, start again */
       }
    }
    if (pweb->server_no == -1) {
@@ -1181,7 +1191,8 @@ DBXCON * mg_obtain_connection(MGWEB *pweb)
          pweb->server_no = 0;
          pweb->psrv = ppath->psrv[pweb->server_no];
          mg_leave_critical_section((void *) &mg_global_mutex);
-         return NULL;
+         strcpy(pweb->error, "All available DB Servers are currently offline");
+         return CACHE_FAILURE;
       }
       psrv = ppath->psrv[pweb->server_no];
    }
@@ -1238,11 +1249,14 @@ DBXCON * mg_obtain_connection(MGWEB *pweb)
 
    pweb->psrv = psrv;
    if (!pcon) {
-      return NULL;
+      strcpy(pweb->error, "Unable to allocate memory for a new connection");
+      return CACHE_FAILURE;
    }
-   pcon->error[0] = '\0';
-   pcon->error_code = 0;
-   pcon->error_no = 0;
+
+   pweb->pcon = pcon;
+   pweb->error[0] = '\0';
+   pweb->error_code = 0;
+   pweb->error_no = 0;
 
 /*
    {
@@ -1253,7 +1267,7 @@ DBXCON * mg_obtain_connection(MGWEB *pweb)
 */
 
    if (use_existing) {
-      return pcon;
+      return CACHE_SUCCESS;
    }
 
    pcon->net_connection = 0;
@@ -1271,12 +1285,9 @@ DBXCON * mg_obtain_connection(MGWEB *pweb)
    pcon->p_isc_so = NULL;
    pcon->p_ydb_so = NULL;
    pcon->psrv = psrv;
-   pcon->plog = &pcon->log;
    pcon->p_db_mutex = &pcon->db_mutex;
    mg_mutex_create(pcon->p_db_mutex);
    pcon->p_zv = &pcon->zv;
-
-   mg_log_init(pcon->plog);
 
    pcon->pid = 0;
   
@@ -1305,21 +1316,23 @@ DBXCON * mg_obtain_connection(MGWEB *pweb)
    }
 
    if (!pcon->psrv->dbtype) {
-      strcpy(pcon->error, "Unable to determine the database type");
+      strcpy(pweb->error, "Unable to determine the database type");
       rc = CACHE_NOCON;
       pcon->alloc = 0;
       pcon->inuse = 0;
-      return pcon;
+      pweb->pcon = NULL;
+      return rc;
    }
 
-   rc = mg_connect(pweb, pcon, 0);
+   rc = mg_connect(pweb, 0);
 
    if (rc != CACHE_SUCCESS) {
       pcon->alloc = 0;
       pcon->inuse = 0;
+      pweb->pcon = NULL;
    }
 
-   return pcon;
+   return rc;
 }
 
 
@@ -1369,7 +1382,7 @@ int mg_server_offline(MGWEB *pweb, MGSRV *psrv, int context)
    while (pcon) {
       if (pcon->alloc && pcon->psrv == psrv) {
          if (psrv->net_connection == 1 && pcon->inuse == 0) { /* network */
-            mg_release_connection(pweb, pcon, 1);
+            mg_release_connection(pweb, 1);
          }
       }
       pcon = pcon->pnext;
@@ -1379,13 +1392,16 @@ int mg_server_offline(MGWEB *pweb, MGSRV *psrv, int context)
 }
 
 
-int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
+int mg_connect(MGWEB *pweb, int context)
 {
    int rc;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    rc = CACHE_SUCCESS;
    if (!pcon->psrv->shdir && pcon->psrv->ip_address && pcon->psrv->port) {
-      rc = netx_tcp_connect(pcon, 0);
+      rc = netx_tcp_connect(pweb, 0);
 /*
       {
          char buffer[256];
@@ -1397,11 +1413,11 @@ int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
          pcon->alloc = 0;
          pcon->closed = 1;
          rc = CACHE_NOCON;
-         mg_error_message(pcon, rc);
+         mg_error_message(pweb, rc);
          return rc;
       }
  
-      rc = netx_tcp_handshake(pcon, 0);
+      rc = netx_tcp_handshake(pweb, 0);
 /*
       {
          char buffer[256];
@@ -1414,7 +1430,7 @@ int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
          pcon->alloc = 0;
          pcon->closed = 1;
          rc = CACHE_NOCON;
-         mg_error_message(pcon, rc);
+         mg_error_message(pweb, rc);
          return rc;
       }
 
@@ -1424,7 +1440,7 @@ int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
    }
 
    if (!pcon->psrv->shdir) {
-      strcpy(pcon->error, "Unable to determine the path to the database installation");
+      strcpy(pweb->error, "Unable to determine the path to the database installation");
       rc = CACHE_NOCON;
       return rc;
    }
@@ -1433,7 +1449,7 @@ int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
 
    DBX_LOCK(0);
    if (pcon->psrv->dbtype != DBX_DBTYPE_YOTTADB) {
-      rc = isc_open(pcon);
+      rc = isc_open(pweb);
 
       if (rc == CACHE_SUCCESS) {
          pcon->alloc = 1;
@@ -1443,7 +1459,7 @@ int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
       }
    }
    else {
-      rc = ydb_open(pcon);
+      rc = ydb_open(pweb);
 
       if (rc == CACHE_SUCCESS) {
          pcon->alloc = 1;
@@ -1461,9 +1477,12 @@ int mg_connect(MGWEB *pweb, DBXCON *pcon, int context)
 }
 
 
-int mg_release_connection(MGWEB *pweb, DBXCON *pcon, int close_connection)
+int mg_release_connection(MGWEB *pweb, int close_connection)
 {
    int rc;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    if (!pcon) {
       return CACHE_FAILURE;
@@ -1476,7 +1495,7 @@ int mg_release_connection(MGWEB *pweb, DBXCON *pcon, int close_connection)
    }
 
    if (pcon->net_connection) {
-      rc = netx_tcp_disconnect(pcon, close_connection);
+      rc = netx_tcp_disconnect(pweb, close_connection);
    }
    else if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
       if (pcon->p_ydb_so->loaded) {
@@ -1484,7 +1503,7 @@ int mg_release_connection(MGWEB *pweb, DBXCON *pcon, int close_connection)
          /* printf("\r\np_ydb_exit=%d\r\n", rc); */
       }
 
-      strcpy(pcon->error, "");
+      strcpy(pweb->error, "");
 /*
       mg_dso_unload(pcon->p_ydb_so->p_library); 
       pcon->p_ydb_so->p_library = NULL;
@@ -1501,7 +1520,7 @@ int mg_release_connection(MGWEB *pweb, DBXCON *pcon, int close_connection)
          DBX_UNLOCK();
       }
 
-      strcpy(pcon->error, "");
+      strcpy(pweb->error, "");
 
       mg_dso_unload(pcon->p_isc_so->p_library); 
 
@@ -1551,6 +1570,14 @@ MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen)
 
    pweb->evented = 0;
    pweb->wserver_chunks_response = 0;
+
+   pweb->error[0] = '\0';
+   pweb->error_code = 0;
+   pweb->error_no = 0;
+
+   pweb->pcon = NULL;
+   pweb->psrv = NULL;
+   pweb->ppath = NULL;
 
    pweb->request_clen = (int) request_clen;
 /*
@@ -2426,7 +2453,7 @@ __try {
    
    psrv = mg_server;
    if (!psrv) {
-      strcpy(mg_system.config_error, "No Server configurations found");
+      strcpy(mg_system.config_error, "No DB Server configurations found");
       goto mg_verify_config_exit;
    }
 
@@ -2444,7 +2471,7 @@ __try {
    while (psrv) {
       psrv->nagle_algorithm = 0;
       if (!psrv->dbtype_name) {
-         sprintf(mg_system.config_error, "Missing database type from Server '%s'", psrv->name);
+         sprintf(mg_system.config_error, "Missing database type from DB Server '%s'", psrv->name);
          break;
       }
       else {
@@ -2456,7 +2483,7 @@ __try {
          else if (!strcmp(psrv->dbtype_name, "yottadb"))
             psrv->dbtype = DBX_DBTYPE_YOTTADB;
          else {
-            sprintf(mg_system.config_error, "Unrecognized database name (%s) specified for Server '%s'", psrv->dbtype_name, psrv->name);
+            sprintf(mg_system.config_error, "Unrecognized database name (%s) specified for DB Server '%s'", psrv->dbtype_name, psrv->name);
          }
       }
       if (!psrv->timeout) {
@@ -2466,11 +2493,11 @@ __try {
          psrv->net_connection = 0;
          if (psrv->dbtype != DBX_DBTYPE_YOTTADB) {
             if (!psrv->username) {
-               sprintf(mg_system.config_error, "Missing username from Server '%s'", psrv->name);
+               sprintf(mg_system.config_error, "Missing username from DB Server '%s'", psrv->name);
                break;
             }
             if (!psrv->password) {
-               sprintf(mg_system.config_error, "Missing password from Server '%s'", psrv->name);
+               sprintf(mg_system.config_error, "Missing password from DB Server '%s'", psrv->name);
                break;
             }
          }
@@ -2478,11 +2505,11 @@ __try {
       else {
          psrv->net_connection = 1;
          if (!psrv->ip_address) {
-            sprintf(mg_system.config_error, "Missing host from Server '%s'", psrv->name);
+            sprintf(mg_system.config_error, "Missing host from DB Server '%s'", psrv->name);
             break;
          }
          if (!psrv->port) {
-            sprintf(mg_system.config_error, "Missing tcp_port from Server '%s'", psrv->name);
+            sprintf(mg_system.config_error, "Missing tcp_port from DB Server '%s'", psrv->name);
             break;
          }
       }
@@ -2492,9 +2519,9 @@ __try {
 
       if (pbuf) {
          sprintf(pbuf, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null");
-         mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: server", 0);
+         mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: DB Server", 0);
          if (psrv->penv) {
-            sprintf(pbuf, "mg_web: configuration: server: environment variables for server name=%s;", psrv->name);
+            sprintf(pbuf, "mg_web: configuration: DB Server: environment variables for DB Server name=%s;", psrv->name);
             mg_log_buffer(&(mg_system.log), NULL, (char *) psrv->penv->p_buffer, (int) psrv->penv->data_size, pbuf, 0);
          }
       }
@@ -2513,7 +2540,7 @@ __try {
          break;
       }
       if (!ppath->servers[0]) {
-         sprintf(mg_system.config_error, "No Servers defined for Location '%s'", ppath->name);
+         sprintf(mg_system.config_error, "No DB Servers defined for Location '%s'", ppath->name);
          break;
       }
       for (n = 0; ppath->servers[n]; n ++) {
@@ -2526,7 +2553,7 @@ __try {
             psrv = psrv->pnext;
          }
          if (!psrv) {
-            sprintf(mg_system.config_error, "Server configuration for '%s' not found for Location '%s'", ppath->servers[n], ppath->name);
+            sprintf(mg_system.config_error, "DB Server configuration for '%s' not found for Location '%s'", ppath->servers[n], ppath->name);
             break;
          }
       }
@@ -2534,7 +2561,7 @@ __try {
          break;
       }
       if (!ppath->psrv[0] || !ppath->servers[0]) {
-         sprintf(mg_system.config_error, "No Servers found for Location '%s'", ppath->name);
+         sprintf(mg_system.config_error, "No DB Servers found for Location '%s'", ppath->name);
          break;
       }
 
@@ -2601,12 +2628,15 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
-int isc_load_library(DBXCON *pcon)
+int isc_load_library(MGWEB *pweb)
 {
    int n, len, result;
    char primlib[DBX_ERROR_SIZE], primerr[DBX_ERROR_SIZE];
    char verfile[256], fun[64];
    char *libnam[16];
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    strcpy(pcon->p_isc_so->libdir, pcon->psrv->shdir);
    strcpy(pcon->p_isc_so->funprfx, "Cache");
@@ -2695,8 +2725,8 @@ int isc_load_library(DBXCON *pcon)
             strcpy(pcon->p_isc_so->funprfx, "Iris");
             strcpy(pcon->p_isc_so->dbname, "IRIS");
          }
-         strcpy(pcon->error, "");
-         pcon->error_code = 0;
+         strcpy(pweb->error, "");
+         pweb->error_code = 0;
          break;
       }
 
@@ -2709,8 +2739,8 @@ int isc_load_library(DBXCON *pcon)
 
          lpMsgBuf = NULL;
          errorcode = GetLastError();
-         sprintf(pcon->error, "Error loading %s Library: %s; Error Code : %ld", pcon->p_isc_so->dbname, primlib, errorcode);
-         len2 = (int) strlen(pcon->error);
+         sprintf(pweb->error, "Error loading %s Library: %s; Error Code : %ld", pcon->p_isc_so->dbname, primlib, errorcode);
+         len2 = (int) strlen(pweb->error);
          len1 = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                         NULL,
                         errorcode,
@@ -2734,16 +2764,16 @@ int isc_load_library(DBXCON *pcon)
                *p = 'I';
                *(p + 1) = 't';
             }
-            strcat(pcon->error, " (");
-            strcat(pcon->error, primerr);
-            strcat(pcon->error, ")");
+            strcat(pweb->error, " (");
+            strcat(pweb->error, primerr);
+            strcat(pweb->error, ")");
          }
          if (lpMsgBuf)
             LocalFree(lpMsgBuf);
 #else
          p = (char *) dlerror();
          sprintf(primerr, "Cannot load %s library: Error Code: %d", pcon->p_isc_so->dbname, errno);
-         len2 = strlen(pcon->error);
+         len2 = strlen(pweb->error);
          if (p) {
             strncpy(primerr, p, DBX_ERROR_SIZE - 1);
             primerr[DBX_ERROR_SIZE - 1] = '\0';
@@ -2751,9 +2781,9 @@ int isc_load_library(DBXCON *pcon)
             if (len1 < 1)
                len1 = 0;
             primerr[len1] = '\0';
-            strcat(pcon->error, " (");
-            strcat(pcon->error, primerr);
-            strcat(pcon->error, ")");
+            strcat(pweb->error, " (");
+            strcat(pweb->error, primerr);
+            strcat(pweb->error, ")");
          }
 #endif
       }
@@ -2766,54 +2796,54 @@ int isc_load_library(DBXCON *pcon)
    sprintf(fun, "%sSetDir", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheSetDir = (int (*) (char *)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheSetDir) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
 
    sprintf(fun, "%sSecureStartA", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheSecureStartA = (int (*) (CACHE_ASTRP, CACHE_ASTRP, CACHE_ASTRP, unsigned long, int, CACHE_ASTRP, CACHE_ASTRP)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheSecureStartA) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
 
    sprintf(fun, "%sEnd", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheEnd = (int (*) (void)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheEnd) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
 
    sprintf(fun, "%sExStrNew", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheExStrNew = (unsigned char * (*) (CACHE_EXSTRP, int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheExStrNew) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sExStrNewW", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheExStrNewW = (unsigned short * (*) (CACHE_EXSTRP, int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheExStrNewW) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sExStrNewH", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheExStrNewH = (wchar_t * (*) (CACHE_EXSTRP, int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
 /*
    if (!pcon->p_isc_so->p_CacheExStrNewH) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
 */
    sprintf(fun, "%sPushExStr", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushExStr = (int (*) (CACHE_EXSTRP)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushExStr) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPushExStrW", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushExStrW = (int (*) (CACHE_EXSTRP)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushExStrW) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPushExStrH", pcon->p_isc_so->funprfx);
@@ -2822,13 +2852,13 @@ int isc_load_library(DBXCON *pcon)
    sprintf(fun, "%sPopExStr", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePopExStr = (int (*) (CACHE_EXSTRP)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePopExStr) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPopExStrW", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePopExStrW = (int (*) (CACHE_EXSTRP)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePopExStrW) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPopExStrH", pcon->p_isc_so->funprfx);
@@ -2837,19 +2867,19 @@ int isc_load_library(DBXCON *pcon)
    sprintf(fun, "%sExStrKill", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheExStrKill = (int (*) (CACHE_EXSTRP)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheExStrKill) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPushStr", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushStr = (int (*) (int, Callin_char_t *)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushStr) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPushStrW", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushStrW = (int (*) (int, short *)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushStrW) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPushStrH", pcon->p_isc_so->funprfx);
@@ -2858,13 +2888,13 @@ int isc_load_library(DBXCON *pcon)
    sprintf(fun, "%sPopStr", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePopStr = (int (*) (int *, Callin_char_t **)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePopStr) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPopStrW", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePopStrW = (int (*) (int *, short **)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePopStrW) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPopStrH", pcon->p_isc_so->funprfx);
@@ -2873,31 +2903,31 @@ int isc_load_library(DBXCON *pcon)
    sprintf(fun, "%sPushDbl", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushDbl = (int (*) (double)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushDbl) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPushIEEEDbl", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushIEEEDbl = (int (*) (double)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushIEEEDbl) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPopDbl", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePopDbl = (int (*) (double *)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePopDbl) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPushInt", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushInt = (int (*) (int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushInt) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPopInt", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePopInt = (int (*) (int *)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePopInt) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
 
@@ -2912,7 +2942,7 @@ int isc_load_library(DBXCON *pcon)
    }
    sprintf(fun, "%sPushInt64", pcon->p_isc_so->funprfx);
    if (!pcon->p_isc_so->p_CachePushInt64) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPopInt64", pcon->p_isc_so->funprfx);
@@ -2921,7 +2951,7 @@ int isc_load_library(DBXCON *pcon)
       pcon->p_isc_so->p_CachePopInt64 = (int (*) (CACHE_INT64 *)) pcon->p_isc_so->p_CachePopInt;
    }
    if (!pcon->p_isc_so->p_CachePopInt64) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
 */
@@ -2929,85 +2959,85 @@ int isc_load_library(DBXCON *pcon)
    sprintf(fun, "%sPushGlobal", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushGlobal = (int (*) (int, const Callin_char_t *)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushGlobal) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPushGlobalX", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushGlobalX = (int (*) (int, const Callin_char_t *, int, const Callin_char_t *)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushGlobalX) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sGlobalGet", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheGlobalGet = (int (*) (int, int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheGlobalGet) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sGlobalSet", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheGlobalSet = (int (*) (int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheGlobalSet) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sGlobalData", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheGlobalData = (int (*) (int, int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheGlobalData) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sGlobalKill", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheGlobalKill = (int (*) (int, int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheGlobalKill) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sGlobalOrder", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheGlobalOrder = (int (*) (int, int, int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheGlobalOrder) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sGlobalQuery", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheGlobalQuery = (int (*) (int, int, int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheGlobalQuery) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sGlobalIncrement", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheGlobalIncrement = (int (*) (int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheGlobalIncrement) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sGlobalRelease", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheGlobalRelease = (int (*) (void)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheGlobalRelease) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sAcquireLock", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheAcquireLock = (int (*) (int, int, int, int *)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheAcquireLock) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sReleaseAllLocks", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheReleaseAllLocks = (int (*) (void)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheReleaseAllLocks) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sReleaseLock", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CacheReleaseLock = (int (*) (int, int)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CacheReleaseLock) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
    sprintf(fun, "%sPushLock", pcon->p_isc_so->funprfx);
    pcon->p_isc_so->p_CachePushLock = (int (*) (int, const Callin_char_t *)) mg_dso_sym(pcon->p_isc_so->p_library, (char *) fun);
    if (!pcon->p_isc_so->p_CachePushLock) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_isc_so->dbname, pcon->p_isc_so->libnam, fun);
       goto isc_load_library_exit;
    }
 
@@ -3088,9 +3118,9 @@ int isc_load_library(DBXCON *pcon)
 
 isc_load_library_exit:
 
-   if (pcon->error[0]) {
+   if (pweb->error[0]) {
       pcon->p_isc_so->loaded = 0;
-      pcon->error_code = 1009;
+      pweb->error_code = 1009;
       result = CACHE_NOCON;
       return result;
    }
@@ -3099,7 +3129,7 @@ isc_load_library_exit:
 }
 
 
-int isc_authenticate(DBXCON *pcon)
+int isc_authenticate(MGWEB *pweb)
 {
    unsigned char reopen;
    int termflag, timeout;
@@ -3110,6 +3140,9 @@ int isc_authenticate(DBXCON *pcon)
 	CACHESTR ppassword;
 	CACHESTR pexename;
 	int rc;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    reopen = 0;
    termflag = 0;
@@ -3117,8 +3150,8 @@ int isc_authenticate(DBXCON *pcon)
 
 isc_authenticate_reopen:
 
-   pcon->error_code = 0;
-   *pcon->error = '\0';
+   pweb->error_code = 0;
+   *pweb->error = '\0';
 	strcpy((char *) pexename.str, "mg_web");
 	pexename.len = (unsigned short) strlen((char *) pexename.str);
 /*
@@ -3180,33 +3213,33 @@ isc_authenticate_reopen:
 	rc = pcon->p_isc_so->p_CacheSecureStartA(&pusername, &ppassword, &pexename, termflag, timeout, ppin, ppout);
 
 	if (rc != CACHE_SUCCESS) {
-      pcon->error_code = rc;
+      pweb->error_code = rc;
 	   if (rc == CACHE_ACCESSDENIED) {
-	      sprintf(pcon->error, "Authentication: CacheSecureStart() : Access Denied : Check the audit log for the real authentication error (%d)\n", rc);
+	      sprintf(pweb->error, "Authentication: CacheSecureStart() : Access Denied : Check the audit log for the real authentication error (%d)\n", rc);
 	      return 0;
 	   }
 	   if (rc == CACHE_CHANGEPASSWORD) {
-	      sprintf(pcon->error, "Authentication: CacheSecureStart() : Password Change Required (%d)\n", rc);
+	      sprintf(pweb->error, "Authentication: CacheSecureStart() : Password Change Required (%d)\n", rc);
 	      return 0;
 	   }
 	   if (rc == CACHE_ALREADYCON) {
-	      sprintf(pcon->error, "Authentication: CacheSecureStart() : Already Connected (%d)\n", rc);
+	      sprintf(pweb->error, "Authentication: CacheSecureStart() : Already Connected (%d)\n", rc);
 	      return 1;
 	   }
 	   if (rc == CACHE_CONBROKEN) {
-	      sprintf(pcon->error, "Authentication: CacheSecureStart() : Connection was formed and then broken by the server. (%d)\n", rc);
+	      sprintf(pweb->error, "Authentication: CacheSecureStart() : Connection was formed and then broken by the DB Server. (%d)\n", rc);
 	      return 0;
 	   }
 
 	   if (rc == CACHE_FAILURE) {
-	      sprintf(pcon->error, "Authentication: CacheSecureStart() : An unexpected error has occurred. (%d)\n", rc);
+	      sprintf(pweb->error, "Authentication: CacheSecureStart() : An unexpected error has occurred. (%d)\n", rc);
 	      return 0;
 	   }
 	   if (rc == CACHE_STRTOOLONG) {
-	      sprintf(pcon->error, "Authentication: CacheSecureStart() : prinp or prout is too long. (%d)\n", rc);
+	      sprintf(pweb->error, "Authentication: CacheSecureStart() : prinp or prout is too long. (%d)\n", rc);
 	      return 0;
 	   }
-	   sprintf(pcon->error, "Authentication: CacheSecureStart() : Failed (%d)\n", rc);
+	   sprintf(pweb->error, "Authentication: CacheSecureStart() : Failed (%d)\n", rc);
 	   return 0;
    }
 
@@ -3250,9 +3283,12 @@ isc_authenticate_reopen:
 }
 
 
-int isc_open(DBXCON *pcon)
+int isc_open(MGWEB *pweb)
 {
    int rc, error_code, result;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    error_code = 0;
    rc = CACHE_SUCCESS;
@@ -3260,8 +3296,8 @@ int isc_open(DBXCON *pcon)
    if (!pcon->p_isc_so) {
       pcon->p_isc_so = (DBXISCSO *) mg_malloc(NULL, sizeof(DBXISCSO), 0);
       if (!pcon->p_isc_so) {
-         strcpy(pcon->error, "No Memory");
-         pcon->error_code = 1009; 
+         strcpy(pweb->error, "No Memory");
+         pweb->error_code = 1009;
          result = CACHE_NOCON;
          return result;
       }
@@ -3270,8 +3306,8 @@ int isc_open(DBXCON *pcon)
    }
 
    if (pcon->p_isc_so->loaded == 2) {
-      strcpy(pcon->error, "Cannot create multiple connections to the database");
-      pcon->error_code = 1009; 
+      strcpy(pweb->error, "Cannot create multiple connections to the database");
+      pweb->error_code = 1009; 
       rc = CACHE_NOCON;
       goto isc_open_exit;
    }
@@ -3281,7 +3317,7 @@ int isc_open(DBXCON *pcon)
    }
 
    if (!pcon->p_isc_so->loaded) {
-      rc = isc_load_library(pcon);
+      rc = isc_load_library(pweb);
       if (rc != CACHE_SUCCESS) {
          goto isc_open_exit;
       }
@@ -3289,8 +3325,8 @@ int isc_open(DBXCON *pcon)
 
    rc = pcon->p_isc_so->p_CacheSetDir(pcon->psrv->shdir);
 
-   if (!isc_authenticate(pcon)) {
-      pcon->error_code = error_code;
+   if (!isc_authenticate(pweb)) {
+      pweb->error_code = error_code;
       rc = CACHE_NOCON;
    }
    else {
@@ -3439,30 +3475,33 @@ int isc_pop_value(DBXCON *pcon, DBXVAL *value, int required_type)
 }
 
 
-int isc_error_message(DBXCON *pcon, int error_code)
+int isc_error_message(MGWEB *pweb, int error_code)
 {
    int size, size1, len;
    CACHE_ASTR *pcerror;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    size = DBX_ERROR_SIZE;
 
    if (pcon) {
       if (error_code < 0) {
-         pcon->error_code = 900 + (error_code * -1);
+         pweb->error_code = 900 + (error_code * -1);
       }
       else {
-         pcon->error_code = error_code;
+         pweb->error_code = error_code;
       }
    }
    else {
       return 0;
    }
 
-   if (pcon->error[0]) {
+   if (pweb->error[0]) {
       goto isc_error_message_exit;
    }
 
-   pcon->error[0] = '\0';
+   pweb->error[0] = '\0';
 
    size1 = size;
 
@@ -3480,110 +3519,110 @@ int isc_error_message(DBXCON *pcon, int error_code)
             if (len >= DBX_ERROR_SIZE) {
                len = DBX_ERROR_SIZE - 1;
             }
-            strncpy(pcon->error, (char *) pcerror->str, len);
-            pcon->error[len] = '\0';
+            strncpy(pweb->error, (char *) pcerror->str, len);
+            pweb->error[len] = '\0';
          }
          mg_free(NULL, (void *) pcerror, 801);
-         size1 -= (int) strlen(pcon->error);
+         size1 -= (int) strlen(pweb->error);
       }
    }
 
    switch (error_code) {
       case CACHE_SUCCESS:
-         strncat(pcon->error, "Operation completed successfully!", size1 - 1);
+         strncat(pweb->error, "Operation completed successfully!", size1 - 1);
          break;
       case CACHE_ACCESSDENIED:
-         strncat(pcon->error, "Authentication has failed. Check the audit log for the real authentication error.", size1 - 1);
+         strncat(pweb->error, "Authentication has failed. Check the audit log for the real authentication error.", size1 - 1);
          break;
       case CACHE_ALREADYCON:
-         strncat(pcon->error, "Connection already existed. Returned if you call CacheSecureStartH from a $ZF function.", size1 - 1);
+         strncat(pweb->error, "Connection already existed. Returned if you call CacheSecureStartH from a $ZF function.", size1 - 1);
          break;
       case CACHE_CHANGEPASSWORD:
-         strncat(pcon->error, "Password change required. This return value is only returned if you are using Cach\xe7 authentication.", size1 - 1);
+         strncat(pweb->error, "Password change required. This return value is only returned if you are using Cach\xe7 authentication.", size1 - 1);
          break;
       case CACHE_CONBROKEN:
-         strncat(pcon->error, "Connection was broken by the server. Check arguments for validity.", size1 - 1);
+         strncat(pweb->error, "Connection was broken by the DB Server. Check arguments for validity.", size1 - 1);
          break;
       case CACHE_FAILURE:
-         strncat(pcon->error, "An unexpected error has occurred.", size1 - 1);
+         strncat(pweb->error, "An unexpected error has occurred.", size1 - 1);
          break;
       case CACHE_STRTOOLONG:
-         strncat(pcon->error, "String is too long.", size1 - 1);
+         strncat(pweb->error, "String is too long.", size1 - 1);
          break;
       case CACHE_NOCON:
-         strncat(pcon->error, "No connection has been established.", size1 - 1);
+         strncat(pweb->error, "No connection has been established.", size1 - 1);
          break;
       case CACHE_ERSYSTEM:
-         strncat(pcon->error, "Either the Cache engine generated a <SYSTEM> error, or callin detected an internal data inconsistency.", size1 - 1);
+         strncat(pweb->error, "Either the Cache engine generated a <SYSTEM> error, or callin detected an internal data inconsistency.", size1 - 1);
          break;
       case CACHE_ERARGSTACK:
-         strncat(pcon->error, "Argument stack overflow.", size1 - 1);
+         strncat(pweb->error, "Argument stack overflow.", size1 - 1);
          break;
       case CACHE_ERSTRINGSTACK:
-         strncat(pcon->error, "String stack overflow.", size1 - 1);
+         strncat(pweb->error, "String stack overflow.", size1 - 1);
          break;
       case CACHE_ERPROTECT:
-         strncat(pcon->error, "Protection violation.", size1 - 1);
+         strncat(pweb->error, "Protection violation.", size1 - 1);
          break;
       case CACHE_ERUNDEF:
-         strncat(pcon->error, "Global node is undefined", size1 - 1);
+         strncat(pweb->error, "Global node is undefined", size1 - 1);
          break;
       case CACHE_ERUNIMPLEMENTED:
-         strncat(pcon->error, "String is undefined OR feature is not implemented.", size1 - 1);
+         strncat(pweb->error, "String is undefined OR feature is not implemented.", size1 - 1);
          break;
       case CACHE_ERSUBSCR:
-         strncat(pcon->error, "Subscript error in Global node (subscript null/empty or too long)", size1 - 1);
+         strncat(pweb->error, "Subscript error in Global node (subscript null/empty or too long)", size1 - 1);
          break;
       case CACHE_ERNOROUTINE:
-         strncat(pcon->error, "Routine does not exist", size1 - 1);
+         strncat(pweb->error, "Routine does not exist", size1 - 1);
          break;
       case CACHE_ERNOLINE:
-         strncat(pcon->error, "Function does not exist in routine", size1 - 1);
+         strncat(pweb->error, "Function does not exist in routine", size1 - 1);
          break;
       case CACHE_ERPARAMETER:
-         strncat(pcon->error, "Function arguments error", size1 - 1);
+         strncat(pweb->error, "Function arguments error", size1 - 1);
          break;
       case CACHE_BAD_GLOBAL:
-         strncat(pcon->error, "Invalid global name", size1 - 1);
+         strncat(pweb->error, "Invalid global name", size1 - 1);
          break;
       case CACHE_BAD_NAMESPACE:
-         strncat(pcon->error, "Invalid NameSpace name", size1 - 1);
+         strncat(pweb->error, "Invalid NameSpace name", size1 - 1);
          break;
       case CACHE_BAD_FUNCTION:
-         strncat(pcon->error, "Invalid function name", size1 - 1);
+         strncat(pweb->error, "Invalid function name", size1 - 1);
          break;
       case CACHE_BAD_CLASS:
-         strncat(pcon->error, "Invalid class name", size1 - 1);
+         strncat(pweb->error, "Invalid class name", size1 - 1);
          break;
       case CACHE_BAD_METHOD:
-         strncat(pcon->error, "Invalid method name", size1 - 1);
+         strncat(pweb->error, "Invalid method name", size1 - 1);
          break;
       case CACHE_ERNOCLASS:
-         strncat(pcon->error, "Class does not exist", size1 - 1);
+         strncat(pweb->error, "Class does not exist", size1 - 1);
          break;
       case CACHE_ERBADOREF:
-         strncat(pcon->error, "Invalid Object Reference", size1 - 1);
+         strncat(pweb->error, "Invalid Object Reference", size1 - 1);
          break;
       case CACHE_ERNOMETHOD:
-         strncat(pcon->error, "Method does not exist", size1 - 1);
+         strncat(pweb->error, "Method does not exist", size1 - 1);
          break;
       case CACHE_ERNOPROPERTY:
-         strncat(pcon->error, "Property does not exist", size1 - 1);
+         strncat(pweb->error, "Property does not exist", size1 - 1);
          break;
       case CACHE_ETIMEOUT:
-         strncat(pcon->error, "Operation timed out", size1 - 1);
+         strncat(pweb->error, "Operation timed out", size1 - 1);
          break;
       case CACHE_BAD_STRING:
-         strncat(pcon->error, "Invalid string", size1 - 1);
+         strncat(pweb->error, "Invalid string", size1 - 1);
          break;
       case CACHE_ERNAMSP:
-         strncat(pcon->error, "Invalid Namespace", size1 - 1);
+         strncat(pweb->error, "Invalid Namespace", size1 - 1);
          break;
       default:
-         strncat(pcon->error, "Database Server Error", size1 - 1);
+         strncat(pweb->error, "DB Server Error", size1 - 1);
          break;
    }
-   pcon->error[size - 1] = '\0';
+   pweb->error[size - 1] = '\0';
 
 isc_error_message_exit:
 
@@ -3591,12 +3630,15 @@ isc_error_message_exit:
 }
 
 
-int ydb_load_library(DBXCON *pcon)
+int ydb_load_library(MGWEB *pweb)
 {
    int n, len, result;
    char primlib[DBX_ERROR_SIZE], primerr[DBX_ERROR_SIZE];
    char verfile[256], fun[64];
    char *libnam[16];
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    strcpy(pcon->p_ydb_so->libdir, pcon->psrv->shdir);
    strcpy(pcon->p_ydb_so->funprfx, "ydb");
@@ -3646,8 +3688,8 @@ int ydb_load_library(DBXCON *pcon)
 
          lpMsgBuf = NULL;
          errorcode = GetLastError();
-         sprintf(pcon->error, "Error loading %s Library: %s; Error Code : %ld",  pcon->p_ydb_so->dbname, primlib, errorcode);
-         len2 = (int) strlen(pcon->error);
+         sprintf(pweb->error, "Error loading %s Library: %s; Error Code : %ld",  pcon->p_ydb_so->dbname, primlib, errorcode);
+         len2 = (int) strlen(pweb->error);
          len1 = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                         NULL,
                         errorcode,
@@ -3671,16 +3713,16 @@ int ydb_load_library(DBXCON *pcon)
                *p = 'I';
                *(p + 1) = 't';
             }
-            strcat(pcon->error, " (");
-            strcat(pcon->error, primerr);
-            strcat(pcon->error, ")");
+            strcat(pweb->error, " (");
+            strcat(pweb->error, primerr);
+            strcat(pweb->error, ")");
          }
          if (lpMsgBuf)
             LocalFree(lpMsgBuf);
 #else
          p = (char *) dlerror();
          sprintf(primerr, "Cannot load %s library: Error Code: %d", pcon->p_ydb_so->dbname, errno);
-         len2 = strlen(pcon->error);
+         len2 = strlen(pweb->error);
          if (p) {
             strncpy(primerr, p, DBX_ERROR_SIZE - 1);
             primerr[DBX_ERROR_SIZE - 1] = '\0';
@@ -3688,9 +3730,9 @@ int ydb_load_library(DBXCON *pcon)
             if (len1 < 1)
                len1 = 0;
             primerr[len1] = '\0';
-            strcat(pcon->error, " (");
-            strcat(pcon->error, primerr);
-            strcat(pcon->error, ")");
+            strcat(pweb->error, " (");
+            strcat(pweb->error, primerr);
+            strcat(pweb->error, ")");
          }
 #endif
       }
@@ -3703,91 +3745,91 @@ int ydb_load_library(DBXCON *pcon)
    sprintf(fun, "%s_init", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_init = (int (*) (void)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_init) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_exit", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_exit = (int (*) (void)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_exit) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_malloc", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_malloc = (int (*) (size_t)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_malloc) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_free", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_free = (int (*) (void *)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_free) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_data_s", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_data_s = (int (*) (ydb_buffer_t *, int, ydb_buffer_t *, unsigned int *)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_data_s) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_delete_s", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_delete_s = (int (*) (ydb_buffer_t *, int, ydb_buffer_t *, int)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_delete_s) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_set_s", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_set_s = (int (*) (ydb_buffer_t *, int, ydb_buffer_t *, ydb_buffer_t *)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_set_s) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_get_s", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_get_s = (int (*) (ydb_buffer_t *, int, ydb_buffer_t *, ydb_buffer_t *)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_get_s) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_subscript_next_s", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_subscript_next_s = (int (*) (ydb_buffer_t *, int, ydb_buffer_t *, ydb_buffer_t *)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_subscript_next_s) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_subscript_previous_s", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_subscript_previous_s = (int (*) (ydb_buffer_t *, int, ydb_buffer_t *, ydb_buffer_t *)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_subscript_previous_s) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_node_next_s", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_node_next_s = (int (*) (ydb_buffer_t *, int, ydb_buffer_t *, int *, ydb_buffer_t *)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_node_next_s) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_node_previous_s", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_node_previous_s = (int (*) (ydb_buffer_t *, int, ydb_buffer_t *, int *, ydb_buffer_t *)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_node_previous_s) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_incr_s", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_incr_s = (int (*) (ydb_buffer_t *, int, ydb_buffer_t *, ydb_buffer_t *, ydb_buffer_t *)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_incr_s) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_ci", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_ci = (int (*) (const char *, ...)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_ci) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
    sprintf(fun, "%s_cip", pcon->p_ydb_so->funprfx);
    pcon->p_ydb_so->p_ydb_cip = (int (*) (ci_name_descriptor *, ...)) mg_dso_sym(pcon->p_ydb_so->p_library, (char *) fun);
    if (!pcon->p_ydb_so->p_ydb_cip) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_ydb_so->dbname, pcon->p_ydb_so->libnam, fun);
       goto ydb_load_library_exit;
    }
 
@@ -3800,9 +3842,9 @@ int ydb_load_library(DBXCON *pcon)
 
 ydb_load_library_exit:
 
-   if (pcon->error[0]) {
+   if (pweb->error[0]) {
       pcon->p_ydb_so->loaded = 0;
-      pcon->error_code = 1009;
+      pweb->error_code = 1009;
       result = CACHE_NOCON;
       return result;
    }
@@ -3811,20 +3853,23 @@ ydb_load_library_exit:
 }
 
 
-int ydb_open(DBXCON *pcon)
+int ydb_open(MGWEB *pweb)
 {
    int rc, result;
    char buffer[256], buffer1[256];
    ydb_buffer_t zv, data;
+   DBXCON *pcon;
 
-   pcon->error_code = 0;
+   pcon = pweb->pcon;
+
+   pweb->error_code = 0;
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_ydb_so) {
       pcon->p_ydb_so = (DBXYDBSO *) mg_malloc(NULL, sizeof(DBXYDBSO), 0);
       if (!pcon->p_ydb_so) {
-         strcpy(pcon->error, "No Memory");
-         pcon->error_code = 1009; 
+         strcpy(pweb->error, "No Memory");
+         pweb->error_code = 1009; 
          result = CACHE_NOCON;
          return result;
       }
@@ -3833,14 +3878,14 @@ int ydb_open(DBXCON *pcon)
    }
 
    if (pcon->p_ydb_so->loaded == 2) {
-      strcpy(pcon->error, "Cannot create multiple connections to the database");
-      pcon->error_code = 1009; 
+      strcpy(pweb->error, "Cannot create multiple connections to the database");
+      pweb->error_code = 1009; 
       rc = CACHE_NOCON;
       goto ydb_open_exit;
    }
 
    if (!pcon->p_ydb_so->loaded) {
-      rc = ydb_load_library(pcon);
+      rc = ydb_load_library(pweb);
       if (rc != CACHE_SUCCESS) {
          goto ydb_open_exit;
       }
@@ -3924,12 +3969,14 @@ int ydb_parse_zv(char *zv, DBXZV * p_ydb_sv)
 }
 
 
-int ydb_error_message(DBXCON *pcon, int error_code)
+int ydb_error_message(MGWEB *pweb, int error_code)
 {
    int rc;
    char buffer[256], buffer1[256];
    ydb_buffer_t zstatus, data;
+   DBXCON *pcon;
 
+   pcon = pweb->pcon;
    rc = 0;
    if (pcon->p_ydb_so && pcon->p_ydb_so->p_ydb_get_s) {
       strcpy(buffer, "$zstatus");
@@ -3947,11 +3994,11 @@ int ydb_error_message(DBXCON *pcon, int error_code)
          data.buf_addr[data.len_used] = '\0';
       }
 
-      strcpy(pcon->error, data.buf_addr);
+      strcpy(pweb->error, data.buf_addr);
    }
    else {
-      if (!pcon->error[0]) {
-         strcpy(pcon->error, "No connection has been established");
+      if (!pweb->error[0]) {
+         strcpy(pweb->error, "No connection has been established");
       }
    }
 
@@ -3959,12 +4006,15 @@ int ydb_error_message(DBXCON *pcon, int error_code)
 }
 
 
-int gtm_load_library(DBXCON *pcon)
+int gtm_load_library(MGWEB *pweb)
 {
    int n, len, result;
    char primlib[DBX_ERROR_SIZE], primerr[DBX_ERROR_SIZE];
    char verfile[256], fun[64];
    char *libnam[16];
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    strcpy(pcon->p_gtm_so->libdir, pcon->psrv->shdir);
    strcpy(pcon->p_gtm_so->funprfx, "gtm");
@@ -4014,8 +4064,8 @@ int gtm_load_library(DBXCON *pcon)
 
          lpMsgBuf = NULL;
          errorcode = GetLastError();
-         sprintf(pcon->error, "Error loading %s Library: %s; Error Code : %ld",  pcon->p_gtm_so->dbname, primlib, errorcode);
-         len2 = (int) strlen(pcon->error);
+         sprintf(pweb->error, "Error loading %s Library: %s; Error Code : %ld",  pcon->p_gtm_so->dbname, primlib, errorcode);
+         len2 = (int) strlen(pweb->error);
          len1 = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                         NULL,
                         errorcode,
@@ -4039,16 +4089,16 @@ int gtm_load_library(DBXCON *pcon)
                *p = 'I';
                *(p + 1) = 't';
             }
-            strcat(pcon->error, " (");
-            strcat(pcon->error, primerr);
-            strcat(pcon->error, ")");
+            strcat(pweb->error, " (");
+            strcat(pweb->error, primerr);
+            strcat(pweb->error, ")");
          }
          if (lpMsgBuf)
             LocalFree(lpMsgBuf);
 #else
          p = (char *) dlerror();
          sprintf(primerr, "Cannot load %s library: Error Code: %d", pcon->p_gtm_so->dbname, errno);
-         len2 = strlen(pcon->error);
+         len2 = strlen(pweb->error);
          if (p) {
             strncpy(primerr, p, DBX_ERROR_SIZE - 1);
             primerr[DBX_ERROR_SIZE - 1] = '\0';
@@ -4056,9 +4106,9 @@ int gtm_load_library(DBXCON *pcon)
             if (len1 < 1)
                len1 = 0;
             primerr[len1] = '\0';
-            strcat(pcon->error, " (");
-            strcat(pcon->error, primerr);
-            strcat(pcon->error, ")");
+            strcat(pweb->error, " (");
+            strcat(pweb->error, primerr);
+            strcat(pweb->error, ")");
          }
 #endif
       }
@@ -4071,27 +4121,27 @@ int gtm_load_library(DBXCON *pcon)
    sprintf(fun, "%s_init", pcon->p_gtm_so->funprfx);
    pcon->p_gtm_so->p_gtm_init = (int (*) (void)) mg_dso_sym(pcon->p_gtm_so->p_library, (char *) fun);
    if (!pcon->p_gtm_so->p_gtm_init) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_gtm_so->dbname, pcon->p_gtm_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_gtm_so->dbname, pcon->p_gtm_so->libnam, fun);
       goto gtm_load_library_exit;
    }
    sprintf(fun, "%s_exit", pcon->p_gtm_so->funprfx);
    pcon->p_gtm_so->p_gtm_exit = (int (*) (void)) mg_dso_sym(pcon->p_gtm_so->p_library, (char *) fun);
    if (!pcon->p_gtm_so->p_gtm_exit) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_gtm_so->dbname, pcon->p_gtm_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_gtm_so->dbname, pcon->p_gtm_so->libnam, fun);
       goto gtm_load_library_exit;
    }
 
    sprintf(fun, "%s_ci", pcon->p_gtm_so->funprfx);
    pcon->p_gtm_so->p_gtm_ci = (int (*) (const char *, ...)) mg_dso_sym(pcon->p_gtm_so->p_library, (char *) fun);
    if (!pcon->p_gtm_so->p_gtm_ci) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_gtm_so->dbname, pcon->p_gtm_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_gtm_so->dbname, pcon->p_gtm_so->libnam, fun);
       goto gtm_load_library_exit;
    }
 
    sprintf(fun, "%s_zstatus", pcon->p_gtm_so->funprfx);
    pcon->p_gtm_so->p_gtm_ci = (int (*) (const char *, ...)) mg_dso_sym(pcon->p_gtm_so->p_library, (char *) fun);
    if (!pcon->p_gtm_so->p_gtm_ci) {
-      sprintf(pcon->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_gtm_so->dbname, pcon->p_gtm_so->libnam, fun);
+      sprintf(pweb->error, "Error loading %s library: %s; Cannot locate the following function : %s", pcon->p_gtm_so->dbname, pcon->p_gtm_so->libnam, fun);
       goto gtm_load_library_exit;
    }
 
@@ -4101,9 +4151,9 @@ int gtm_load_library(DBXCON *pcon)
 
 gtm_load_library_exit:
 
-   if (pcon->error[0]) {
+   if (pweb->error[0]) {
       pcon->p_gtm_so->loaded = 0;
-      pcon->error_code = 1009;
+      pweb->error_code = 1009;
       result = CACHE_NOCON;
       return result;
    }
@@ -4112,19 +4162,22 @@ gtm_load_library_exit:
 }
 
 
-int gtm_open(DBXCON *pcon)
+int gtm_open(MGWEB *pweb)
 {
    int rc, result;
    char buffer[256];
+   DBXCON *pcon;
 
-   pcon->error_code = 0;
+   pcon = pweb->pcon;
+
+   pweb->error_code = 0;
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_gtm_so) {
       pcon->p_gtm_so = (DBXGTMSO *) mg_malloc(NULL, sizeof(DBXGTMSO), 0);
       if (!pcon->p_gtm_so) {
-         strcpy(pcon->error, "No Memory");
-         pcon->error_code = 1009; 
+         strcpy(pweb->error, "No Memory");
+         pweb->error_code = 1009; 
          result = CACHE_NOCON;
          return result;
       }
@@ -4133,14 +4186,14 @@ int gtm_open(DBXCON *pcon)
    }
 
    if (pcon->p_gtm_so->loaded == 2) {
-      strcpy(pcon->error, "Cannot create multiple connections to the database");
-      pcon->error_code = 1009; 
+      strcpy(pweb->error, "Cannot create multiple connections to the database");
+      pweb->error_code = 1009; 
       rc = CACHE_NOCON;
       goto gtm_open_exit;
    }
 
    if (!pcon->p_gtm_so->loaded) {
-      rc = gtm_load_library(pcon);
+      rc = gtm_load_library(pweb);
       if (rc != CACHE_SUCCESS) {
          goto gtm_open_exit;
       }
@@ -4210,19 +4263,21 @@ int gtm_parse_zv(char *zv, DBXZV * p_gtm_sv)
 }
 
 
-int gtm_error_message(DBXCON *pcon, int error_code)
+int gtm_error_message(MGWEB *pweb, int error_code)
 {
    int rc;
    char buffer[256];
+   DBXCON *pcon;
 
+   pcon = pweb->pcon;
    if (pcon->p_gtm_so && pcon->p_gtm_so->p_gtm_zstatus) {
       pcon->p_gtm_so->p_gtm_zstatus(buffer, 255);
-      strcpy(pcon->error, buffer);
+      strcpy(pweb->error, buffer);
       rc = CACHE_SUCCESS;
    }
    else {
-      if (!pcon->error[0]) {
-         strcpy(pcon->error, "No connection has been established");
+      if (!pweb->error[0]) {
+         strcpy(pweb->error, "No connection has been established");
       }
       rc = CACHE_NOCON;
    }
@@ -4343,7 +4398,7 @@ int mg_buf_free(MGBUF *p_buf)
 }
 
 
-int mg_buf_cpy(LPMGBUF p_buf, char *buffer, unsigned long size)
+int mg_buf_cpy(MGBUF *p_buf, char *buffer, unsigned long size)
 {
    unsigned long  result, req_size, csize, increment_size;
 
@@ -4377,7 +4432,7 @@ int mg_buf_cpy(LPMGBUF p_buf, char *buffer, unsigned long size)
 }
 
 
-int mg_buf_cat(LPMGBUF p_buf, char *buffer, unsigned long size)
+int mg_buf_cat(MGBUF *p_buf, char *buffer, unsigned long size)
 {
    unsigned long int result, req_size, csize, tsize, increment_size;
    unsigned char *p_temp;
@@ -4921,25 +4976,27 @@ unsigned long mg_current_process_id(void)
 }
 
 
-int mg_error_message(DBXCON *pcon, int error_code)
+int mg_error_message(MGWEB *pweb, int error_code)
 {
    int rc;
 
-   if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
-      rc = ydb_error_message(pcon, error_code);
+   if (pweb->pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
+      rc = ydb_error_message(pweb, error_code);
    }
    else {
-      rc = isc_error_message(pcon, error_code);
+      rc = isc_error_message(pweb, error_code);
    }
 
    return rc;
 }
 
 
-int mg_cleanup(DBXCON *pcon, MGWEB *pweb)
+int mg_cleanup(MGWEB *pweb)
 {
    int rc;
+   DBXCON *pcon;
 
+   pcon = pweb->pcon;
    rc = CACHE_SUCCESS;
 
    if (pcon->net_connection) {
@@ -5217,7 +5274,7 @@ unsigned int mg_file_size(char *file)
 }
 
 
-int netx_load_winsock(DBXCON *pcon, int context)
+int netx_load_winsock(MGWEB *pweb, int context)
 {
 #if defined(_WIN32)
    int result, mem_locked;
@@ -5430,20 +5487,20 @@ netx_load_winsock_no_so:
          if ((netx_so.winsock == 2 && LOBYTE(netx_so.wsadata.wVersion) != 2)
                || (netx_so.winsock == 1 && (LOBYTE(netx_so.wsadata.wVersion) != 1 || HIBYTE(netx_so.wsadata.wVersion) != 1))) {
   
-            sprintf(pcon->error, "Initialization Error: Wrong version of Winsock library (%s) (%d.%d)", netx_so.libnam, LOBYTE(netx_so.wsadata.wVersion), HIBYTE(netx_so.wsadata.wVersion));
+            sprintf(pweb->error, "Initialization Error: Wrong version of Winsock library (%s) (%d.%d)", netx_so.libnam, LOBYTE(netx_so.wsadata.wVersion), HIBYTE(netx_so.wsadata.wVersion));
             NETX_WSACLEANUP();
             netx_so.wsastartup = -1;
          }
-         else {
+         else { /* v2.1.13 */
             if (strlen(netx_so.libnam))
-               sprintf(pcon->info, "Initialization: Windows Sockets library loaded (%s) Version: %d.%d", netx_so.libnam, LOBYTE(netx_so.wsadata.wVersion), HIBYTE(netx_so.wsadata.wVersion));
+               sprintf(mg_system.info, "Initialization: Windows Sockets library loaded (%s) Version: %d.%d", netx_so.libnam, LOBYTE(netx_so.wsadata.wVersion), HIBYTE(netx_so.wsadata.wVersion));
             else
-               sprintf(pcon->info, "Initialization: Windows Sockets library Version: %d.%d", LOBYTE(netx_so.wsadata.wVersion), HIBYTE(netx_so.wsadata.wVersion));
+               sprintf(mg_system.info, "Initialization: Windows Sockets library Version: %d.%d", LOBYTE(netx_so.wsadata.wVersion), HIBYTE(netx_so.wsadata.wVersion));
             netx_so.winsock_ready = 1;
          }
       }
       else {
-         strcpy(pcon->error, "Initialization Error: Unusable Winsock library");
+         strcpy(pweb->error, "Initialization Error: Unusable Winsock library");
       }
    }
 
@@ -5458,7 +5515,7 @@ netx_load_winsock_no_so:
 }
 
 
-int netx_tcp_connect(DBXCON *pcon, int context)
+int netx_tcp_connect(MGWEB *pweb, int context)
 {
    short physical_ip, ipv6, connected, getaddrinfo_ok;
    int n, errorno;
@@ -5467,9 +5524,12 @@ int netx_tcp_connect(DBXCON *pcon, int context)
    struct sockaddr_in srv_addr, cli_addr;
    struct hostent *hp;
    struct in_addr **pptr;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    pcon->net_connection = 0;
-   pcon->error_no = 0;
+   pweb->error_no = 0;
    connected = 0;
    getaddrinfo_ok = 0;
    spin_count = 0;
@@ -5482,19 +5542,19 @@ int netx_tcp_connect(DBXCON *pcon, int context)
 #if defined(_WIN32)
 
    if (!netx_so.load_attempted) {
-      n = netx_load_winsock(pcon, 0);
+      n = netx_load_winsock(pweb, 0);
       if (n != 0) {
          return CACHE_NOCON;
       }
    }
    if (!netx_so.winsock_ready) {
-      strcpy(pcon->error, (char *) "DLL Load Error: Unusable Winsock Library");
+      strcpy(pweb->error, (char *) "DLL Load Error: Unusable Winsock Library");
       return CACHE_NOCON;
    }
 
    n = netx_so.wsastartup;
    if (n != 0) {
-      strcpy(pcon->error, (char *) "DLL Load Error: Unusable Winsock Library");
+      strcpy(pweb->error, (char *) "DLL Load Error: Unusable Winsock Library");
       return n;
    }
 
@@ -5511,7 +5571,7 @@ int netx_tcp_connect(DBXCON *pcon, int context)
       res = NULL;
       sprintf(port_str, "%d", pcon->psrv->port);
       connected = 0;
-      pcon->error_no = 0;
+      pweb->error_no = 0;
 
       for (mode = 0; mode < 3; mode ++) {
 
@@ -5567,22 +5627,22 @@ int netx_tcp_connect(DBXCON *pcon, int context)
                result = NETX_SETSOCKOPT(pcon->cli_socket, IPPROTO_TCP, TCP_NODELAY, (const char *) &flag, sizeof(int));
 
                if (result < 0) {
-                  strcpy(pcon->error, "Connection Error: Unable to disable the Nagle Algorithm");
+                  strcpy(pweb->error, "Connection Error: Unable to disable the Nagle Algorithm");
                }
 
             }
 
-            pcon->error_no = 0;
-            n = netx_tcp_connect_ex(pcon, (xLPSOCKADDR) ai->ai_addr, (socklen_netx) (ai->ai_addrlen), pcon->timeout);
+            pweb->error_no = 0;
+            n = netx_tcp_connect_ex(pweb, (xLPSOCKADDR) ai->ai_addr, (socklen_netx) (ai->ai_addrlen), pcon->timeout);
             if (n == -2) {
-               pcon->error_no = n;
+               pweb->error_no = n;
                n = -737;
                continue;
             }
             if (SOCK_ERROR(n)) {
                errorno = (int) netx_get_last_error(0);
-               pcon->error_no = errorno;
-               netx_tcp_disconnect(pcon, 0);
+               pweb->error_no = errorno;
+               netx_tcp_disconnect(pweb, 0);
                continue;
             }
             else {
@@ -5594,10 +5654,10 @@ int netx_tcp_connect(DBXCON *pcon, int context)
             break;
       }
 
-      if (pcon->error_no) {
+      if (pweb->error_no) {
          char message[256];
-         netx_get_error_message(pcon->error_no, message, 250, 0);
-         sprintf(pcon->error, "Connection Error: Cannot Connect to Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, pcon->error_no, message);
+         netx_get_error_message(pweb->error_no, message, 250, 0);
+         sprintf(pweb->error, "Connection Error: Cannot Connect to DB Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, pweb->error_no, message);
          n = -5;
       }
 
@@ -5616,7 +5676,7 @@ int netx_tcp_connect(DBXCON *pcon, int context)
       }
       else {
          if (getaddrinfo_ok) {
-            netx_tcp_disconnect(pcon, 0);
+            netx_tcp_disconnect(pweb, 0);
             return -5;
          }
          else {
@@ -5624,8 +5684,8 @@ int netx_tcp_connect(DBXCON *pcon, int context)
 
             errorno = (int) netx_get_last_error(0);
             netx_get_error_message(errorno, message, 250, 0);
-            sprintf(pcon->error, "Connection Error: Cannot identify Server: Error Code: %d (%s)", errorno, message);
-            netx_tcp_disconnect(pcon, 0);
+            sprintf(pweb->error, "Connection Error: Cannot identify DB Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
+            netx_tcp_disconnect(pweb, 0);
             return -5;
          }
       }
@@ -5662,7 +5722,7 @@ int netx_tcp_connect(DBXCON *pcon, int context)
 
       if (hp == NULL) {
          n = -2;
-         strcpy(pcon->error, "Connection Error: Invalid Host");
+         strcpy(pweb->error, "Connection Error: Invalid Host");
          return n;
       }
 
@@ -5683,7 +5743,7 @@ int netx_tcp_connect(DBXCON *pcon, int context)
             n = -2;
             errorno = (int) netx_get_last_error(0);
             netx_get_error_message(errorno, message, 250, 0);
-            sprintf(pcon->error, "Connection Error: Invalid Socket: Context=1: Error Code: %d (%s)", errorno, message);
+            sprintf(pweb->error, "Connection Error: Invalid Socket: Context=1: Error Code: %d (%s)", errorno, message);
             break;
          }
 
@@ -5706,7 +5766,7 @@ int netx_tcp_connect(DBXCON *pcon, int context)
             n = -3;
             errorno = (int) netx_get_last_error(0);
             netx_get_error_message(errorno, message, 250, 0);
-            sprintf(pcon->error, "Connection Error: Cannot bind to Socket: Error Code: %d (%s)", errorno, message);
+            sprintf(pweb->error, "Connection Error: Cannot bind to Socket: Error Code: %d (%s)", errorno, message);
 
             break;
          }
@@ -5718,7 +5778,7 @@ int netx_tcp_connect(DBXCON *pcon, int context)
 
             result = NETX_SETSOCKOPT(pcon->cli_socket, IPPROTO_TCP, TCP_NODELAY, (const char *) &flag, sizeof(int));
             if (result < 0) {
-               strcpy(pcon->error, "Connection Error: Unable to disable the Nagle Algorithm");
+               strcpy(pweb->error, "Connection Error: Unable to disable the Nagle Algorithm");
             }
          }
 
@@ -5727,10 +5787,10 @@ int netx_tcp_connect(DBXCON *pcon, int context)
 
          NETX_MEMCPY(&srv_addr.sin_addr, *pptr, sizeof(struct in_addr));
 
-         n = netx_tcp_connect_ex(pcon, (xLPSOCKADDR) &srv_addr, sizeof(srv_addr), pcon->timeout);
+         n = netx_tcp_connect_ex(pweb, (xLPSOCKADDR) &srv_addr, sizeof(srv_addr), pcon->timeout);
 
          if (n == -2) {
-            pcon->error_no = n;
+            pweb->error_no = n;
             n = -737;
 
             continue;
@@ -5742,10 +5802,10 @@ int netx_tcp_connect(DBXCON *pcon, int context)
             errorno = (int) netx_get_last_error(0);
             netx_get_error_message(errorno, message, 250, 0);
 
-            pcon->error_no = errorno;
-            sprintf(pcon->error, "Connection Error: Cannot Connect to Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
+            pweb->error_no = errorno;
+            sprintf(pweb->error, "Connection Error: Cannot Connect to DB Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
             n = -5;
-            netx_tcp_disconnect(pcon, 0);
+            netx_tcp_disconnect(pweb, 0);
             continue;
          }
          else {
@@ -5755,9 +5815,9 @@ int netx_tcp_connect(DBXCON *pcon, int context)
       }
       if (!connected) {
 
-         netx_tcp_disconnect(pcon, 0);
+         netx_tcp_disconnect(pweb, 0);
 
-         strcpy(pcon->error, "Connection Error: Failed to find the Server via a DNS Lookup");
+         strcpy(pweb->error, "Connection Error: Failed to find the DB Server via a DNS Lookup");
 
          return n;
       }
@@ -5772,7 +5832,7 @@ int netx_tcp_connect(DBXCON *pcon, int context)
          n = -2;
          errorno = (int) netx_get_last_error(0);
          netx_get_error_message(errorno, message, 250, 0);
-         sprintf(pcon->error, "Connection Error: Invalid Socket: Context=2: Error Code: %d (%s)", errorno, message);
+         sprintf(pweb->error, "Connection Error: Invalid Socket: Context=2: Error Code: %d (%s)", errorno, message);
 
          return n;
       }
@@ -5796,9 +5856,9 @@ int netx_tcp_connect(DBXCON *pcon, int context)
          errorno = (int) netx_get_last_error(0);
          netx_get_error_message(errorno, message, 250, 0);
 
-         sprintf(pcon->error, "Connection Error: Cannot bind to Socket: Error Code: %d (%s)", errorno, message);
+         sprintf(pweb->error, "Connection Error: Cannot bind to Socket: Error Code: %d (%s)", errorno, message);
 
-         netx_tcp_disconnect(pcon, 0);
+         netx_tcp_disconnect(pweb, 0);
 
          return n;
       }
@@ -5811,7 +5871,7 @@ int netx_tcp_connect(DBXCON *pcon, int context)
          result = NETX_SETSOCKOPT(pcon->cli_socket, IPPROTO_TCP, TCP_NODELAY, (const char *) &flag, sizeof(int));
 
          if (result < 0) {
-            strcpy(pcon->error, "Connection Error: Unable to disable the Nagle Algorithm");
+            strcpy(pweb->error, "Connection Error: Unable to disable the Nagle Algorithm");
 
          }
       }
@@ -5820,12 +5880,12 @@ int netx_tcp_connect(DBXCON *pcon, int context)
       srv_addr.sin_family = AF_INET;
       srv_addr.sin_addr.s_addr = NETX_INET_ADDR(pcon->psrv->ip_address);
 
-      n = netx_tcp_connect_ex(pcon, (xLPSOCKADDR) &srv_addr, sizeof(srv_addr), pcon->timeout);
+      n = netx_tcp_connect_ex(pweb, (xLPSOCKADDR) &srv_addr, sizeof(srv_addr), pcon->timeout);
       if (n == -2) {
-         pcon->error_no = n;
+         pweb->error_no = n;
          n = -737;
 
-         netx_tcp_disconnect(pcon, 0);
+         netx_tcp_disconnect(pweb, 0);
 
          return n;
       }
@@ -5835,10 +5895,10 @@ int netx_tcp_connect(DBXCON *pcon, int context)
 
          errorno = (int) netx_get_last_error(0);
          netx_get_error_message(errorno, message, 250, 0);
-         pcon->error_no = errorno;
-         sprintf(pcon->error, "Connection Error: Cannot Connect to Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
+         pweb->error_no = errorno;
+         sprintf(pweb->error, "Connection Error: Cannot Connect to DB Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
          n = -5;
-         netx_tcp_disconnect(pcon, 0);
+         netx_tcp_disconnect(pweb, 0);
          return n;
       }
    }
@@ -5850,20 +5910,23 @@ int netx_tcp_connect(DBXCON *pcon, int context)
 }
 
 
-int netx_tcp_handshake(DBXCON *pcon, int context)
+int netx_tcp_handshake(MGWEB *pweb, int context)
 {
    int len;
    char buffer[256];
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    sprintf(buffer, "dbx1~%s\n", pcon->psrv->uci ? pcon->psrv->uci : "");
    len = (int) strlen(buffer);
 
-   netx_tcp_write(pcon, (unsigned char *) buffer, len);
-   len = netx_tcp_read(pcon, (unsigned char *) buffer, 5, 10, 0);
+   netx_tcp_write(pweb, (unsigned char *) buffer, len);
+   len = netx_tcp_read(pweb, (unsigned char *) buffer, 5, 10, 1); /* v2.1.13 */
 
    len = mg_get_size((unsigned char *) buffer);
 
-   netx_tcp_read(pcon, (unsigned char *) buffer, len, 10, 0);
+   netx_tcp_read(pweb, (unsigned char *) buffer, len, 10, 1); /* v2.1.13 */
    if (pcon->psrv->dbtype != DBX_DBTYPE_YOTTADB) {
       isc_parse_zv(buffer, pcon->p_zv);
    }
@@ -5875,11 +5938,14 @@ int netx_tcp_handshake(DBXCON *pcon, int context)
 }
 
 
-int netx_tcp_ping(DBXCON *pcon, MGWEB *pweb, int context)
+int netx_tcp_ping(MGWEB *pweb, int context)
 {
    int rc;
    unsigned char netbuf[32];
    unsigned long netbuf_used;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    netbuf_used = 5;
    mg_add_block_size((unsigned char *) netbuf, 0, 0, 0, DBX_CMND_PING);
@@ -5890,11 +5956,11 @@ int netx_tcp_ping(DBXCON *pcon, MGWEB *pweb, int context)
       mg_log_buffer(&(mg_system.log), pweb, (char *) netbuf, 5, bufferx, 0);
    }
 */
-   rc = netx_tcp_write(pcon, (unsigned char *) netbuf, netbuf_used);
+   rc = netx_tcp_write(pweb, (unsigned char *) netbuf, netbuf_used);
    if (rc < 0) {
       return -1;
    }
-   rc = netx_tcp_read(pcon, (unsigned char *) netbuf, 20, pcon->timeout, 1);
+   rc = netx_tcp_read(pweb, (unsigned char *) netbuf, 20, pcon->timeout, 1);
 /*
    {
       char bufferx[256];
@@ -5938,14 +6004,17 @@ dbx1 ; test
 */
 
 
-int netx_tcp_command(DBXCON *pcon, MGWEB *pweb, int command, int context)
+int netx_tcp_command(MGWEB *pweb, int command, int context)
 {
    int get, rc, offset, reconnect;
    unsigned int netbuf_used;
    unsigned char *netbuf;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    rc = CACHE_SUCCESS;
-   pcon->error[0] = '\0';
+   pweb->error[0] = '\0';
    offset = 10;
 
    netbuf = (unsigned char *) (pweb->input_buf.buf_addr - DBX_IBUFFER_OFFSET);
@@ -5963,14 +6032,14 @@ int netx_tcp_command(DBXCON *pcon, MGWEB *pweb, int command, int context)
 
 netx_tcp_command_reconnect:
 
-   rc = netx_tcp_write(pcon, (unsigned char *) netbuf, netbuf_used);
+   rc = netx_tcp_write(pweb, (unsigned char *) netbuf, netbuf_used);
 
    if (rc < 0) {
       if (reconnect) {
          return rc;
       }
       else {
-         rc = mg_connect(pweb, pcon, 1);
+         rc = mg_connect(pweb, 1);
          if (rc < 0) {
             return rc;
          }
@@ -6010,7 +6079,7 @@ netx_tcp_command_reconnect:
    pweb->failover_possible = 0; /* can't failover after this point */
    pweb->output_val.svalue.len_used = 0;
 
-   rc = netx_tcp_read(pcon, (unsigned char *) pweb->output_val.svalue.buf_addr, offset, pcon->timeout, 1);
+   rc = netx_tcp_read(pweb, (unsigned char *) pweb->output_val.svalue.buf_addr, offset, pcon->timeout, 1);
 /*
    {
       char bufferx[256];
@@ -6026,7 +6095,7 @@ netx_tcp_command_reconnect:
          return rc;
       }
       else {
-         rc = mg_connect(pweb, pcon, 1);
+         rc = mg_connect(pweb, 1);
          if (rc < 0) {
             return rc;
          }
@@ -6044,13 +6113,13 @@ netx_tcp_command_reconnect:
    if (pweb->response_size == 0 && pweb->output_val.svalue.buf_addr[9] == '\x01') {
       pweb->response_streamed = 1;
       pweb->response_size = 5;
-      return netx_tcp_read_stream(pcon, pweb);
+      return netx_tcp_read_stream(pweb);
    }
    else if (pweb->response_size == 0 && pweb->output_val.svalue.buf_addr[9] == '\x02') {
       pweb->response_streamed = 2;
       pweb->response_size = 5;
       pcon->stream_tail_len = 0;
-      return netx_tcp_read_stream(pcon, pweb);
+      return netx_tcp_read_stream(pweb);
    }
 
    MG_LOG_RESPONSE_FRAME(pweb, pweb->output_val.svalue.buf_addr, pweb->response_size);
@@ -6069,7 +6138,7 @@ netx_tcp_command_reconnect:
          get = (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE);
          pweb->response_remaining = (pweb->response_size - get);
       }
-      netx_tcp_read(pcon, (unsigned char *) pweb->output_val.svalue.buf_addr + offset, get, pcon->timeout, 1);
+      netx_tcp_read(pweb, (unsigned char *) pweb->output_val.svalue.buf_addr + offset, get, pcon->timeout, 1);
    }
 
    if (pweb->output_val.type == DBX_DTYPE_OREF) {
@@ -6081,7 +6150,7 @@ netx_tcp_command_reconnect:
 /*
    {
       char buffer[256];
-      sprintf(buffer, "netx_tcp_command RECV cmnd=%d; len=%d; sort=%d; type=%d; oref=%d; rc=%d; error=%s;", command, len, pcon->output_val.sort, pcon->output_val.type, pcon->output_val.num.oref, rc, pcon->error);
+      sprintf(buffer, "netx_tcp_command RECV cmnd=%d; len=%d; sort=%d; type=%d; oref=%d; rc=%d; error=%s;", command, len, pcon->output_val.sort, pcon->output_val.type, pcon->output_val.num.oref, rc, pweb->error);
       mg_buffer_dump(pcon, pcon->output_val.svalue.buf_addr, len, buffer, 8, 0);
    }
 */
@@ -6093,10 +6162,13 @@ netx_tcp_command_reconnect:
 }
 
 
-int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
+int netx_tcp_read_stream(MGWEB *pweb)
 {
    int rc, get, eos;
    DBXVAL *pval;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
    rc = CACHE_SUCCESS;
    pval = &(pweb->output_val);
@@ -6116,7 +6188,7 @@ int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
          eos = 0;
          get = (pval->svalue.len_alloc - (pval->svalue.len_used + DBX_HEADER_SIZE));
          while (get) {
-            rc = netx_tcp_read(pcon, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, get, pcon->timeout, 0);
+            rc = netx_tcp_read(pweb, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, get, pcon->timeout, 0);
 /*
             {
                char bufferx[256];
@@ -6193,7 +6265,7 @@ int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
    }
 
    if (pweb->response_remaining == 0) {
-      rc = netx_tcp_read(pcon, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
+      rc = netx_tcp_read(pweb, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
       if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
          return rc;
       }
@@ -6211,7 +6283,7 @@ int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
    }
 
    for (;;) {
-      rc = netx_tcp_read(pcon, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, pweb->response_remaining, pcon->timeout, 1);
+      rc = netx_tcp_read(pweb, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, pweb->response_remaining, pcon->timeout, 1);
 /*
       {
          char bufferx[256];
@@ -6229,7 +6301,7 @@ int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
       pval->svalue.len_used += pweb->response_remaining;
       pweb->response_size += pweb->response_remaining;
 
-      rc = netx_tcp_read(pcon, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
+      rc = netx_tcp_read(pweb, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
       if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
          break;
       }
@@ -6270,7 +6342,7 @@ int netx_tcp_read_stream(DBXCON *pcon, MGWEB *pweb)
 }
 
 
-int netx_tcp_connect_ex(DBXCON *pcon, xLPSOCKADDR p_srv_addr, socklen_netx srv_addr_len, int timeout)
+int netx_tcp_connect_ex(MGWEB *pweb, xLPSOCKADDR p_srv_addr, socklen_netx srv_addr_len, int timeout)
 {
 #if defined(_WIN32)
    int n;
@@ -6280,6 +6352,9 @@ int netx_tcp_connect_ex(DBXCON *pcon, xLPSOCKADDR p_srv_addr, socklen_netx srv_a
    fd_set rset, wset;
    struct timeval tval;
 #endif
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
 
 #if defined(SOLARIS) && BIT64PLAT
    timeout = 0;
@@ -6296,7 +6371,6 @@ int netx_tcp_connect_ex(DBXCON *pcon, xLPSOCKADDR p_srv_addr, socklen_netx srv_a
 #if defined(_WIN32)
 
       n = NETX_CONNECT(pcon->cli_socket, (xLPSOCKADDR) p_srv_addr, (socklen_netx) srv_addr_len);
-
       return n;
 
 #else
@@ -6310,17 +6384,14 @@ int netx_tcp_connect_ex(DBXCON *pcon, xLPSOCKADDR p_srv_addr, socklen_netx srv_a
       if (n < 0) {
 
          if (errno != EINPROGRESS) {
-
 #if defined(SOLARIS)
-
             if (errno != 2 && errno != 146) {
-               sprintf((char *) pcon->error, "Diagnostic: Solaris: Initial Connection Error errno=%d; EINPROGRESS=%d", errno, EINPROGRESS);
+               sprintf((char *) pweb->error, "Diagnostic: Solaris: Initial Connection Error errno=%d; EINPROGRESS=%d", errno, EINPROGRESS);
                return -1;
             }
 #else
             return -1;
 #endif
-
          }
       }
 
@@ -6346,7 +6417,7 @@ int netx_tcp_connect_ex(DBXCON *pcon, xLPSOCKADDR p_srv_addr, socklen_netx srv_a
             len = sizeof(error);
             if (NETX_GETSOCKOPT(pcon->cli_socket, SOL_SOCKET, SO_ERROR, (void *) &error, &len) < 0) {
 
-               sprintf((char *) pcon->error, "Diagnostic: Solaris: Pending Error %d", errno);
+               sprintf((char *) pweb->error, "Diagnostic: Pending Error %d", errno);
 
                return (-1);   /* Solaris pending error */
             }
@@ -6380,8 +6451,12 @@ int netx_tcp_connect_ex(DBXCON *pcon, xLPSOCKADDR p_srv_addr, socklen_netx srv_a
 }
 
 
-int netx_tcp_disconnect(DBXCON *pcon, int context)
+int netx_tcp_disconnect(MGWEB *pweb, int context)
 {
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
+
    if (!pcon) {
       return 0;
    }
@@ -6407,13 +6482,15 @@ int netx_tcp_disconnect(DBXCON *pcon, int context)
 }
 
 
-int netx_tcp_write(DBXCON *pcon, unsigned char *data, int size)
+int netx_tcp_write(MGWEB *pweb, unsigned char *data, int size)
 {
    int n, rc, errorno, total;
+   DBXCON *pcon;
 
+   pcon = pweb->pcon;
 
    if (pcon->closed == 1) {
-      strcpy(pcon->error, "TCP Write Error: Socket is Closed");
+      strcpy(pweb->error, "TCP Write Error: Socket is Closed");
       return -1;
    }
 
@@ -6428,7 +6505,7 @@ int netx_tcp_write(DBXCON *pcon, unsigned char *data, int size)
             char message[256];
 
             netx_get_error_message(errorno, message, 250, 0);
-            sprintf(pcon->error, "TCP Write Error: Cannot Write Data: Error Code: %d (%s)", errorno, message);
+            sprintf(pweb->error, "TCP Write Error: Cannot Write Data: Error Code: %d (%s)", errorno, message);
             rc = -1;
             break;
          }
@@ -6448,14 +6525,16 @@ int netx_tcp_write(DBXCON *pcon, unsigned char *data, int size)
 }
 
 
-int netx_tcp_read(DBXCON *pcon, unsigned char *data, int size, int timeout, int context)
+int netx_tcp_read(MGWEB *pweb, unsigned char *data, int size, int timeout, int context)
 {
    int result, n, max_fd;
    int len;
    fd_set rset, eset;
    struct timeval tval;
    unsigned long spin_count;
+   DBXCON *pcon;
 
+   pcon = pweb->pcon;
 
    if (!pcon) {
       return NETX_READ_ERROR;
@@ -6496,14 +6575,20 @@ int netx_tcp_read(DBXCON *pcon, unsigned char *data, int size, int timeout, int 
 #endif
 
       if (n == 0) {
-         sprintf(pcon->error, "TCP Read Error: Server did not respond within the timeout period (%d seconds)", timeout);
+         sprintf(pweb->error, "TCP Read Error: DB Server did not respond within the timeout period (%d seconds)", timeout);
          result = NETX_READ_TIMEOUT;
          break;
       }
 
       if (n < 0 || !NETX_FD_ISSET(pcon->cli_socket, &rset)) {
-          strcpy(pcon->error, "TCP Read Error: Server closed the connection without having returned any data");
-          result = NETX_READ_ERROR;
+         int errorno;
+         char message[256];
+
+         errorno = (int) netx_get_last_error(0);
+         netx_get_error_message(errorno, message, 250, 0);
+         sprintf(pweb->error, "TCP Read Error (on select): DB Server closed the connection unexpectedly: Error Code: %d (%s)", errorno, message);
+
+         result = NETX_READ_ERROR;
          break;
       }
 
@@ -6511,11 +6596,19 @@ int netx_tcp_read(DBXCON *pcon, unsigned char *data, int size, int timeout, int 
 
       if (n < 1) {
          if (n == 0) {
+            strcpy(pweb->error, "TCP Read Error (on recv): DB Server closed the connection unexpectedly");
             result = NETX_READ_EOF;
             pcon->closed = 1;
             pcon->eof = 1;
          }
          else {
+            int errorno;
+            char message[256];
+
+            errorno = (int) netx_get_last_error(0);
+            netx_get_error_message(errorno, message, 250, 0);
+            sprintf(pweb->error, "TCP Read Error (on recv): DB Server closed the connection unexpectedly: Error Code: %d (%s)", errorno, message);
+
             result = NETX_READ_ERROR;
             len = 0;
             pcon->closed = 1;

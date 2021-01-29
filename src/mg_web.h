@@ -5,7 +5,7 @@
    |              and YottaDB API                                             |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2020 M/Gateway Developments Ltd,                      |
+   | Copyright (c) 2019-2021 M/Gateway Developments Ltd,                      |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -1076,34 +1076,28 @@ typedef struct tagMGPATH {
 
 
 typedef struct tagDBXCON {
-   int            alloc;
-   int            inuse;
-   int            argc;
-   unsigned long  pid;
-   int            error_code;
-   char           error[DBX_ERROR_SIZE];
-   short          use_db_mutex;
-   DBXMUTEX       *p_db_mutex;
-   DBXMUTEX       db_mutex;
-   DBXZV          *p_zv;
-   DBXZV          zv;
-   DBXLOG         *plog;
-   DBXLOG         log;
-   DBXISCSO       *p_isc_so;
-   DBXYDBSO       *p_ydb_so;
-   DBXGTMSO       *p_gtm_so;
-   short          increment;
-   int            net_connection;
-   int            closed;
-   int            error_no;
-   int            timeout;
-   int            eof;
-   SOCKET         cli_socket;
-   int            int_pipe[2];
-   char           info[256];
-   int            stream_tail_len;
-   unsigned char  stream_tail[8];
-   MGSRV          *psrv;
+   int               alloc;
+   int               inuse;
+   int               argc;
+   unsigned long     pid;
+   short             use_db_mutex;
+   DBXMUTEX          *p_db_mutex;
+   DBXMUTEX          db_mutex;
+   DBXZV             *p_zv;
+   DBXZV             zv;
+   DBXISCSO          *p_isc_so;
+   DBXYDBSO          *p_ydb_so;
+   DBXGTMSO          *p_gtm_so;
+   short             increment;
+   int               net_connection;
+   int               closed;
+   int               timeout;
+   int               eof;
+   SOCKET            cli_socket;
+   int               int_pipe[2];
+   int               stream_tail_len;
+   unsigned char     stream_tail[8];
+   MGSRV             *psrv;
    struct tagDBXCON  *pnext;
 } DBXCON, *PDBXCON;
 
@@ -1123,6 +1117,7 @@ typedef struct tagMGSYS {
    char           module_file[256];
    char           config_file[256];
    char           config_error[512];
+   char           info[256];
    char           *config;
    char           *custompage_dbserver_unavailable;
    char           *custompage_dbserver_busy;
@@ -1196,7 +1191,6 @@ typedef struct tagMGWEBSOCK {
    unsigned char     status_code_buffer[2];
    size_t            remaining_length;
    DBXTHR            db_read_thread;
-   //DBXMUTEX          write_mutex;
 } MGWEBSOCK, *LPMGWEBSOCK;
 
 
@@ -1241,6 +1235,11 @@ typedef struct tagMGWEB {
    int            offset;
    DBXVAL         args[DBX_MAXARGS];
    ydb_buffer_t   yargs[DBX_MAXARGS];
+
+   int            error_no;
+   int            error_code;
+   char           error[DBX_ERROR_SIZE];
+
    MGPATH         *ppath;
    int            server_no;
    MGSRV          *psrv;
@@ -1300,16 +1299,16 @@ int                     mg_websocket_exit             (MGWEB *pweb);
 int                     mg_web                        (MGWEB *pweb);
 int                     mg_web_process                (MGWEB *pweb);
 int                     mg_parse_headers              (MGWEB *pweb);
-int                     mg_web_execute                (MGWEB *pweb, DBXCON *pcon);
+int                     mg_web_execute                (MGWEB *pweb);
 int                     mg_web_http_error             (MGWEB *pweb, int http_status_code, int custompage);
 int                     mg_get_all_cgi_variables      (MGWEB *pweb);
 int                     mg_get_path_configuration     (MGWEB *pweb);
 int                     mg_add_cgi_variable           (MGWEB *pweb, char *name, int name_len, char *value, int value_len);
-DBXCON *                mg_obtain_connection          (MGWEB *pweb);
+int                     mg_obtain_connection          (MGWEB *pweb);
 int                     mg_obtain_server              (MGWEB *pweb, int context);
 int                     mg_server_offline             (MGWEB *pweb, MGSRV *psrv, int context);
-int                     mg_connect                    (MGWEB *pweb, DBXCON *pcon, int context);
-int                     mg_release_connection         (MGWEB *pweb, DBXCON *pcon, int close_connection);
+int                     mg_connect                    (MGWEB *pweb, int context);
+int                     mg_release_connection         (MGWEB *pweb, int close_connection);
 MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen);
 DBXVAL *                mg_extend_response_memory     (MGWEB *pweb);
 int                     mg_release_request_memory     (MGWEB *pweb);
@@ -1321,23 +1320,23 @@ int                     mg_worker_exit                ();
 int                     mg_parse_config               ();
 int                     mg_verify_config              ();
 
-int                     isc_load_library              (DBXCON *pcon);
-int                     isc_authenticate              (DBXCON *pcon);
-int                     isc_open                      (DBXCON *pcon);
+int                     isc_load_library              (MGWEB *pweb);
+int                     isc_authenticate              (MGWEB *pweb);
+int                     isc_open                      (MGWEB *pweb);
 int                     isc_parse_zv                  (char *zv, DBXZV * p_isc_sv);
 int                     isc_change_namespace          (DBXCON *pcon, char *nspace);
 int                     isc_pop_value                 (DBXCON *pcon, DBXVAL *value, int required_type);
-int                     isc_error_message             (DBXCON *pcon, int error_code);
+int                     isc_error_message             (MGWEB *pweb, int error_code);
 
-int                     ydb_load_library              (DBXCON *pcon);
-int                     ydb_open                      (DBXCON *pcon);
+int                     ydb_load_library              (MGWEB *pweb);
+int                     ydb_open                      (MGWEB *pweb);
 int                     ydb_parse_zv                  (char *zv, DBXZV * p_ydb_sv);
-int                     ydb_error_message             (DBXCON *pcon, int error_code);
+int                     ydb_error_message             (MGWEB *pweb, int error_code);
 
-int                     gtm_load_library              (DBXCON *pcon);
-int                     gtm_open                      (DBXCON *pcon);
+int                     gtm_load_library              (MGWEB *pweb);
+int                     gtm_open                      (MGWEB *pweb);
 int                     gtm_parse_zv                  (char *zv, DBXZV * p_gtm_sv);
-int                     gtm_error_message             (DBXCON *pcon, int error_code);
+int                     gtm_error_message             (MGWEB *pweb, int error_code);
 
 int                     mg_add_block_size             (unsigned char *block, unsigned long offset, unsigned long data_len, int dsort, int dtype);
 unsigned long           mg_get_block_size             (unsigned char *block, unsigned long offset, int *dsort, int *dtype);
@@ -1347,9 +1346,8 @@ unsigned long           mg_get_size                   (unsigned char *str);
 int                     mg_buf_init                   (MGBUF *p_buf, int size, int increment_size);
 int                     mg_buf_resize                 (MGBUF *p_buf, unsigned long size);
 int                     mg_buf_free                   (MGBUF *p_buf);
-int                     mg_buf_cpy                    (MGBUF *p_buf, char * buffer, unsigned long size);
-int                     mg_buf_cat                    (MGBUF *p_buf, char * buffer, unsigned long size);
-
+int                     mg_buf_cpy                    (MGBUF *p_buf, char *buffer, unsigned long size);
+int                     mg_buf_cat                    (MGBUF *p_buf, char * uffer, unsigned long size);
 void *                  mg_malloc                     (void *pweb_server, int size, short id);
 void *                  mg_realloc                    (void *pweb_server, void *p, int curr_size, int new_size, short id);
 int                     mg_free                       (void *pweb_server, void *p, short id);
@@ -1369,8 +1367,8 @@ int                     mg_thread_join                (DBXTHR *pthr);
 int                     mg_thread_exit                (void);
 DBXTHID                 mg_current_thread_id          (void);
 unsigned long           mg_current_process_id         (void);
-int                     mg_error_message              (DBXCON *pcon, int error_code);
-int                     mg_cleanup                    (DBXCON *pcon, MGWEB *pweb);
+int                     mg_error_message              (MGWEB *pweb, int error_code);
+int                     mg_cleanup                    (MGWEB *pweb);
 
 int                     mg_mutex_create               (DBXMUTEX *p_mutex);
 int                     mg_mutex_lock                 (DBXMUTEX *p_mutex, int timeout);
@@ -1383,16 +1381,16 @@ int                     mg_leave_critical_section     (void *p_crit);
 int                     mg_sleep                      (unsigned long msecs);
 unsigned int            mg_file_size                  (char *file);
 
-int                     netx_load_winsock             (DBXCON *pcon, int context);
-int                     netx_tcp_connect              (DBXCON *pcon, int context);
-int                     netx_tcp_handshake            (DBXCON *pcon, int context);
-int                     netx_tcp_ping                 (DBXCON *pcon, MGWEB *pweb, int context);
-int                     netx_tcp_command              (DBXCON *pcon, MGWEB *pweb, int command, int context);
-int                     netx_tcp_read_stream          (DBXCON *pcon, MGWEB *pweb);
-int                     netx_tcp_connect_ex           (DBXCON *pcon, xLPSOCKADDR p_srv_addr, socklen_netx srv_addr_len, int timeout);
-int                     netx_tcp_disconnect           (DBXCON *pcon, int context);
-int                     netx_tcp_write                (DBXCON *pcon, unsigned char *data, int size);
-int                     netx_tcp_read                 (DBXCON *pcon, unsigned char *data, int size, int timeout, int context);
+int                     netx_load_winsock             (MGWEB *pweb, int context);
+int                     netx_tcp_connect              (MGWEB *pweb, int context);
+int                     netx_tcp_handshake            (MGWEB *pweb, int context);
+int                     netx_tcp_ping                 (MGWEB *pweb, int context);
+int                     netx_tcp_command              (MGWEB *pweb, int command, int context);
+int                     netx_tcp_read_stream          (MGWEB *pweb);
+int                     netx_tcp_connect_ex           (MGWEB *pweb, xLPSOCKADDR p_srv_addr, socklen_netx srv_addr_len, int timeout);
+int                     netx_tcp_disconnect           (MGWEB *pweb, int context);
+int                     netx_tcp_write                (MGWEB *pweb, unsigned char *data, int size);
+int                     netx_tcp_read                 (MGWEB *pweb, unsigned char *data, int size, int timeout, int context);
 int                     netx_get_last_error           (int context);
 int                     netx_get_error_message        (int error_code, char *message, int size, int context);
 int                     netx_get_std_error_message    (int error_code, char *message, int size, int context);

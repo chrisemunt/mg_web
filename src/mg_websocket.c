@@ -4,7 +4,7 @@
    | Description: HTTP Gateway for InterSystems Cache/IRIS and YottaDB        |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2020 M/Gateway Developments Ltd,                      |
+   | Copyright (c) 2019-2021 M/Gateway Developments Ltd,                      |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -260,8 +260,8 @@ int mg_websocket_disconnect(MGWEB *pweb)
    mg_websocket_write_block(pweb, MG_WS_MESSAGE_TYPE_CLOSE, (unsigned char *) status_code_buffer, sizeof(status_code_buffer));
 */
 
-   mg_cleanup(pweb->pcon, pweb);
-   mg_release_connection(pweb, pweb->pcon, 1);
+   mg_cleanup(pweb);
+   mg_release_connection(pweb, 1);
 
 #if !defined(_WIN32)
    rc = write(pweb->pcon->int_pipe[1], "exit", 4);
@@ -592,7 +592,7 @@ void mg_websocket_incoming_frame(MGWEB *pweb, MGWSRSTATE *pread_state, char *blo
                         mg_log_buffer(pweb->plog, pweb, (char *)  application_data, (int) application_data_offset, bufferx, 0);
                      }
 */
-                     netx_tcp_write(pweb->pcon, (unsigned char *) application_data, (int) application_data_offset);
+                     netx_tcp_write(pweb, (unsigned char *) application_data, (int) application_data_offset);
                   }
                   if (pread_state->framing_state != MG_WS_DATA_FRAMING_CLOSE) {
                      pread_state->framing_state = MG_WS_DATA_FRAMING_START;
@@ -649,7 +649,7 @@ DBX_THR_TYPE mg_websocket_dbserver_read(void *arg)
 
    for (;;) {
       size = sizeof(data) - 1;
-      len = netx_tcp_read(pweb->pcon, (unsigned char *) data, (int) size, timeout, 0);
+      len = netx_tcp_read(pweb, (unsigned char *) data, (int) size, timeout, 0);
 /*
 {
    char bufferx[256];
