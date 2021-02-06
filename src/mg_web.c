@@ -81,7 +81,10 @@ Version 2.1.12 23 November 2020:
 
 Version 2.1.13 29 January 2021:
    Improved error reporting (to the event log).
-      Miscellaneous minor bug fixes.
+   Miscellaneous minor bug fixes.
+
+Version 2.1.14 6 February 2021:
+   Correct a regression in the generation of chunked responses (regression introduced in v2.1.13).
 
 */
 
@@ -547,12 +550,13 @@ mg_web_process_failover:
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
-            strcpy(pweb->response_content, buffer);
+            /* v2.1.14 */
+            memcpy((void *) pweb->response_content, (void *) buffer, (size_t) len);
          }
          MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
          mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
          pval = pweb->output_val.pnext;
-         while (pval) { /* 2.0.8 */
+         while (pval) { /* v2.0.8 */
             mg_client_write(pweb, (unsigned char *) pval->svalue.buf_addr, (int) pval->svalue.len_used);
             pval = pval->pnext;
          }
@@ -561,7 +565,8 @@ mg_web_process_failover:
          MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
          mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
          pval = pweb->output_val.pnext;
-         while (pval) { /* 2.0.8 */
+         while (pval) { /* v2.0.8 */
+            MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pval->svalue.buf_addr, pval->svalue.len_used); /* v2.1.14 */
             mg_client_write(pweb, (unsigned char *) pval->svalue.buf_addr, (int) pval->svalue.len_used);
             pval = pval->pnext;
          }
@@ -586,7 +591,8 @@ mg_web_process_failover:
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
-            strcpy(pweb->response_content, buffer);
+            /* v2.1.14 */
+            memcpy((void *) pweb->response_content, (void *) buffer, (size_t) len);
             if (pweb->response_remaining == 0) {
                strcpy(pweb->response_content + get, "\r\n0\r\n\r\n");
                get += 7;
@@ -6314,11 +6320,12 @@ int netx_tcp_read_stream(MGWEB *pweb)
       }
       pweb->response_remaining = mg_get_size((unsigned char *) pweb->db_chunk_head);
       MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
-      if ((pval->svalue.len_used + pweb->response_size) > (unsigned int) (pval->svalue.len_alloc - DBX_HEADER_SIZE)) {
+      /* if ((pval->svalue.len_used + pweb->response_size) > (unsigned int) (pval->svalue.len_alloc - DBX_HEADER_SIZE)) { */
+      if ((pval->svalue.len_used + pweb->response_remaining) > (unsigned int) (pval->svalue.len_alloc - DBX_HEADER_SIZE)) { /* v2.1.14 */
 /*
          {
             char bufferx[256];
-            sprintf(bufferx, "Possibly Chunked response from DB Server: pweb->response_size=%lu; mg_system.chunking=%lu;", pweb->response_size, mg_system.chunking);
+            sprintf(bufferx, "Possibly Chunked response from DB Server: pweb->response_size=%lu; pweb->response_remaining=%lu; pval->svalue.len_used=%lu; pval->svalue.len_alloc=%lu; mg_system.chunking=%lu;", pweb->response_size, pweb->response_remaining, pval->svalue.len_used, pval->svalue.len_alloc, mg_system.chunking);
             mg_log_event(pweb->plog, pweb, bufferx, "test", 0);
          }
 */
