@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-29 January 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+6 February 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.1; Revision 13.
+* Current Release: Version: 2.1; Revision 14.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -190,4 +190,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.1.13 (29 January 2021)
 
 * Improved error reporting (to the event log).
-* Miscellaneous minor bug fixes. 
+* Miscellaneous minor bug fixes.
+
+### v2.1.14 (6 February 2021)
+
+* Correct a regression in the generation of chunked responses (regression introduced in v2.1.13).
