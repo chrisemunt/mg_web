@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-6 February 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+20 April 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.1; Revision 14.
+* Current Release: Version: 2.1; Revision 15.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -195,3 +195,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.1.14 (6 February 2021)
 
 * Correct a regression in the generation of chunked responses (regression introduced in v2.1.13).
+
+### v2.1.15 (20 April 2021)
+
+* Add functionality to parse multipart MIME content.  In addition to the inclusion of 'helper functions' to parse multipart content in the DB Superserver code base, this update will also parse such content on the web server side to extract variables used for Server Affinity.
+	* This enhancement requires DB Superserver version 4.2; Revision 20 (or later).
