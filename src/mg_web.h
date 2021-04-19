@@ -1211,6 +1211,7 @@ typedef struct tagMGWEB {
    char           *query_string;
    int            query_string_len;
    char           request_content_type[1024];
+   char           boundary[256]; /* v2.1.15 */
    char           *request_cookie;
    int            response_clen_server;
    int            response_streamed;
@@ -1314,6 +1315,7 @@ DBXVAL *                mg_extend_response_memory     (MGWEB *pweb);
 int                     mg_release_request_memory     (MGWEB *pweb);
 int                     mg_find_sa_variable           (MGWEB *pweb);
 int                     mg_find_sa_variable_ex        (MGWEB *pweb, char *name, int name_len, unsigned char *nvpairs, int nvpairs_len);
+int                     mg_find_sa_variable_ex_mp     (MGWEB *pweb, char *name, int name_len, unsigned char *content, int content_len); /* v2.1.15 */
 int                     mg_find_sa_cookie             (MGWEB *pweb);
 int                     mg_worker_init                ();
 int                     mg_worker_exit                ();

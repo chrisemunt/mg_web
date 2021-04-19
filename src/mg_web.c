@@ -86,6 +86,11 @@ Version 2.1.13 29 January 2021:
 Version 2.1.14 6 February 2021:
    Correct a regression in the generation of chunked responses (regression introduced in v2.1.13).
 
+Version 2.1.15 20 April 2021:
+   Parse multipart content to extract server-affinity variables used for load-balancing and failover.
+      In addition to the inclusion of 'helper functions' to parse multipart content in the DB Superserver code base, this update will also parse such content on the web server side to extract variables used for Server Affinity.
+	   This enhancement requires DB Superserver version 4.2; Revision 20 (or later)
+
 */
 
 
@@ -1654,7 +1659,8 @@ int mg_release_request_memory(MGWEB *pweb)
 
 int mg_find_sa_variable(MGWEB *pweb)
 {
-   int rc, n, server_no, len, name_len;
+   int rc, n, nb, server_no, len, name_len;
+   char *p;
 
    server_no = -1;
 
@@ -1663,6 +1669,13 @@ int mg_find_sa_variable(MGWEB *pweb)
    char bufferx[1024];
    sprintf(bufferx, "HTTP Request: pweb=%p; psrv=%p; ppath=%p;", (void *) pweb, (void *) pweb->psrv, (void *) pweb->ppath);
    mg_log_buffer(pweb->plog, pweb, pweb->input_buf.buf_addr, pweb->input_buf.len_used, bufferx, 0);
+}
+*/
+/*
+{
+   char bufferx[1024];
+   sprintf(bufferx, "HTTP Request: pweb=%p; psrv=%p; ppath=%p;", (void *) pweb, (void *) pweb->psrv, (void *) pweb->ppath);
+   mg_log_buffer(pweb->plog, pweb, pweb->request_content, pweb->request_clen, bufferx, 0);
 }
 */
 
@@ -1679,11 +1692,40 @@ int mg_find_sa_variable(MGWEB *pweb)
          if (!pweb->request_content_type[0]) {
             len = 1020;
             rc = mg_get_cgi_variable(pweb, "CONTENT_TYPE", pweb->request_content_type, &len);
+
+            if (rc == MG_CGI_SUCCESS) { /* v2.1.15 */
+               p = strstr(pweb->request_content_type, "boundary=");
+               if (p) {
+                  p += 9;
+                  if ((*p) == '\"') {
+                     p ++;
+                  }
+                  nb = 0;
+                  while ((*p)) {
+                     if ((*p) == '\"' || (*p) == ';' || (*p) == ' ') {
+                        pweb->boundary[nb] = '\0';
+                        break;
+                     }
+                     else {
+                        pweb->boundary[nb ++] = *p ++;
+                     }
+                  }
+               }
+            }
          }
-         if (rc == MG_CGI_SUCCESS && strstr(pweb->request_content_type, "application/x-www-form-urlencoded")) {
-            server_no = mg_find_sa_variable_ex(pweb,  pweb->ppath->sa_variables[n], name_len, (unsigned char *) pweb->request_content, pweb->request_clen);
-            if (server_no != -1) {
-               break;
+
+         if (rc == MG_CGI_SUCCESS) {
+            if (strstr(pweb->request_content_type, "application/x-www-form-urlencoded")) {
+               server_no = mg_find_sa_variable_ex(pweb, pweb->ppath->sa_variables[n], name_len, (unsigned char *) pweb->request_content, pweb->request_clen);
+               if (server_no != -1) {
+                  break;
+               }
+            }
+            else if (pweb->boundary[0]) { /* v2.1.15 */
+               server_no = mg_find_sa_variable_ex_mp(pweb, pweb->ppath->sa_variables[n], name_len, (unsigned char *) pweb->request_content, pweb->request_clen);
+               if (server_no != -1) {
+                  break;
+               }
             }
          }
       }
@@ -1752,6 +1794,97 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
       else {
          sprintf(bufferx, "mg_find_sa_variable_ex: name=%s; server_no=%d", name, server_no);
          mg_log_buffer(pweb->plog, pweb, (char *) nvpairs, nvpairs_len, bufferx, 0);
+      }
+   }
+*/
+
+   return server_no;
+}
+
+
+/* v2.1.15 */
+int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned char *content, int content_len)
+{
+   int server_no, n, nc, nn, blen;
+   char *ph, *phz, *pn, *pnz, *pv, *pz;
+   char cname[64];
+/*
+   mg_log_buffer(pweb->plog, pweb, (char *) content, content_len, "Multipart Payload", 0);
+*/
+   server_no = -1;
+   blen = (int) strlen(pweb->boundary);
+   for (nc = 0; nc < (content_len - 3); nc ++) {
+      if (content[nc] == '-' && content[nc + 1] == '-') {
+         if (!strncmp((char *) (content + (nc + 2)), pweb->boundary, blen)) {
+            ph = content + (nc + blen + 4); /* section header starts here */
+            phz = strstr(ph, "\r\n\r\n"); /* section header ends here */
+            if (phz) {
+               *phz = '\0';
+               pv = (phz + 4); /* section value starts here */
+               pz = strstr(pv, "\r\n"); /* section value ends here */
+               if (pz) {
+                  *pz = '\0';
+                  pn = strstr(ph, "name=");
+                  if (pn) {
+                     pn += 5;
+                     if ((*pn) = '\"') {
+                        pn ++;
+                     }
+                     pnz = pn;
+                     nn = 0;
+                     cname[0] = '\0';
+                     while ((*pn)) {
+                        if ((*pn) == '\"' || (*pn) == ';' || (*pn) == ' ' || nn > 60) {
+                           cname[nn] = '\0';
+                           break;
+                        }
+                        else {
+                           cname[nn ++] = *pn ++;
+                        }
+                     }
+/*
+                     {
+                        char bufferx[1024];
+                        sprintf(bufferx, "A section header=%s; name=%s", ph, cname);
+                        mg_log_event(pweb->plog, pweb, (char *) pv, bufferx, 0);
+                     }
+*/
+                     if (!strcmp(name, cname)) {
+                        if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
+                           server_no = (int) strtol(pv, NULL, 10);
+                        }
+                        else {
+                           for (n = 0; pweb->ppath->servers[n]; n ++) {
+                              if (!strcmp(pweb->ppath->servers[n], pv)) {
+                                 server_no = n;
+                                 break;
+                              }
+                           }
+                        }
+                     }
+                  }
+                  *pz = '\r';
+               }
+               *phz = '\r';
+            }
+            if (server_no != -1) {
+               break;
+            }
+            nc += blen;
+         }
+      }
+   }
+
+/*
+   {
+      char bufferx[256];
+      if (server_no == -1) {
+         sprintf(bufferx, "mg_find_sa_variable_ex_mp: name=%s; server_no=%d (not found)", name, server_no);
+         mg_log_buffer(pweb->plog, pweb, (char *) content, content_len, bufferx, 0);
+      }
+      else {
+         sprintf(bufferx, "mg_find_sa_variable_ex_mp: name=%s; server_no=%d", name, server_no);
+         mg_log_buffer(pweb->plog, pweb, (char *) content, content_len, bufferx, 0);
       }
    }
 */
