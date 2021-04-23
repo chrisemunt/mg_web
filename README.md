@@ -199,4 +199,4 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.1.15 (20 April 2021)
 
 * Add functionality to parse multipart MIME content.  In addition to the inclusion of 'helper functions' to parse multipart content in the DB Superserver code base, this update will also parse such content on the web server side to extract variables used for Server Affinity.
-	* This enhancement requires DB Superserver version 4.2; Revision 20 (or later).
+	* This enhancement requires DB Superserver version 4.2; Revision 21 (or later).
