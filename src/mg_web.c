@@ -91,6 +91,11 @@ Version 2.1.15 20 April 2021:
       In addition to the inclusion of 'helper functions' to parse multipart content in the DB Superserver code base, this update will also parse such content on the web server side to extract variables used for Server Affinity.
 	   This enhancement requires DB Superserver version 4.2; Revision 20 (or later)
 
+Version 2.1.16 3 May 2021:
+   Introduce a mechanism through which DB Servers can be excluded from Load-Balancing and Failover.
+      DB Servers marked in this way are usually reserved to enable specific applications to be accessed through the hosting path.
+      Example: servers LOCALA LOCALB:ex LOCALC
+
 */
 
 
@@ -184,12 +189,12 @@ __try {
 
    if (mg_system.log.log_frames) {
       char bufferx[1024];
-      sprintf(bufferx, "request=%s; configuration path=%s; server1=%s;", pweb->script_name_lc, pweb->ppath->name, pweb->ppath->psrv[0]->name);
+      sprintf(bufferx, "request=%s; configuration path=%s; server1=%s;", pweb->script_name_lc, pweb->ppath->name, pweb->ppath->servers[0].psrv->name);
       mg_log_event(pweb->plog, pweb, bufferx, "mg_web: information", 0);
    }
 
 
-   pweb->psrv = pweb->ppath->psrv[0];
+   pweb->psrv = pweb->ppath->servers[0].psrv;
    pweb->server_no = -1;
 
    if (!pweb->psrv) {
@@ -320,7 +325,7 @@ __try {
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_DATA, DBX_DTYPE_STR);
    pweb->input_buf.len_used += (len + 5);
 
-   if (pweb->ppath->psrv[1]) { /* more than one server - look for affinity variable or cookie */
+   if (pweb->ppath->servers[1].psrv) { /* more than one server - look for affinity variable or cookie */
       if (pweb->ppath->sa_order == 1) { /* look for server affinity variable first */
          if (mg_find_sa_variable(pweb) == -1) {
             if (pweb->ppath->sa_cookie) {
@@ -372,7 +377,8 @@ mg_web_process_failover:
       mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
 
       mg_server_offline(pweb, pweb->psrv, 0);
-      if (pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no) {
+      /* v2.1.16 : DB Servers marked for exclusive use cannot failover to another server in the list */
+      if (pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no && pweb->ppath->servers[pweb->server_no].exclusive == 0) {
          sprintf(pweb->error, "Cannot connect to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
          mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
          failover_no ++;
@@ -487,7 +493,8 @@ mg_web_process_failover:
    }
    else { /* v2.1.13 */
       mg_server_offline(pweb, pweb->psrv, 0);
-      if (pweb->failover_possible && pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no) {
+      /* v2.1.16 : DB Servers marked for exclusive use cannot failover to another server in the list */
+      if (pweb->failover_possible && pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no && pweb->ppath->servers[pweb->server_no].exclusive == 0) {
          sprintf(pweb->error, "Cannot send request to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
          mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
          failover_no ++;
@@ -1105,7 +1112,7 @@ __try {
 /*
       if (mg_system.log.log_frames) {
          char bufferx[256];
-         sprintf(bufferx, "request=%s; ppath=%p; path=%s; ppath->name_len=%d; server1=%s; len_max=%d;", pweb->script_name_lc, ppath, ppath->name, ppath->name_len, ppath->psrv[0]->name, len_max);
+         sprintf(bufferx, "request=%s; ppath=%p; path=%s; ppath->name_len=%d; server1=%s; len_max=%d;", pweb->script_name_lc, ppath, ppath->name, ppath->name_len, ppath->servers[0].psrv->name, len_max);
          mg_log_event(pweb->plog, pweb, bufferx, "mg_web: information", 0);
       }
 */
@@ -1189,8 +1196,9 @@ int mg_obtain_connection(MGWEB *pweb)
    mg_enter_critical_section((void *) &mg_global_mutex);
 
    if (pweb->server_no >= 0 && pweb->server_no < 32) { /* server affinity as server number pre-defined */
-      if (pweb->server_no < ppath->srv_max && ppath->psrv[pweb->server_no] && ppath->psrv[pweb->server_no]->offline == 0) { /* check server in range and online */
-         psrv = ppath->psrv[pweb->server_no];
+      /* v2.1.16 : DB Server can be used if online and must be used if it's marked for exclusive use */
+      if (pweb->server_no < ppath->srv_max && ppath->servers[pweb->server_no].psrv && (ppath->servers[pweb->server_no].psrv->offline == 0 || ppath->servers[pweb->server_no].exclusive)) { /* check server in range and online */
+         psrv = ppath->servers[pweb->server_no].psrv;
       }
       else {
          pweb->server_no = -1; /* preferred server not available, start again */
@@ -1200,12 +1208,12 @@ int mg_obtain_connection(MGWEB *pweb)
       pweb->server_no = mg_obtain_server(pweb, 0);
       if (pweb->server_no == -1) { /* no online servers in list */
          pweb->server_no = 0;
-         pweb->psrv = ppath->psrv[pweb->server_no];
+         pweb->psrv = ppath->servers[pweb->server_no].psrv;
          mg_leave_critical_section((void *) &mg_global_mutex);
          strcpy(pweb->error, "All available DB Servers are currently offline");
          return CACHE_FAILURE;
       }
-      psrv = ppath->psrv[pweb->server_no];
+      psrv = ppath->servers[pweb->server_no].psrv;
    }
 
    pcon = mg_connection;
@@ -1354,12 +1362,21 @@ int mg_obtain_server(MGWEB *pweb, int context)
    server_no_start = pweb->ppath->server_no;
    server_no = -1;
    while (server_no == -1) {
-      if (pweb->ppath->psrv[pweb->ppath->server_no]->offline == 0) {
+
+      /* v2.1.16 */
+/*
+      {
+         char buffer[256];
+         sprintf(buffer, "pweb->ppath->server_no=%d; pweb->ppath->servers[pweb->ppath->server_no].psrv->offline=%d;  pweb->ppath->servers[pweb->ppath->server_no].exclusive=%d;", pweb->ppath->server_no, pweb->ppath->servers[pweb->ppath->server_no].psrv->offline, pweb->ppath->servers[pweb->ppath->server_no].exclusive);
+         mg_log_event(pweb->plog, pweb, buffer, "mg_obtain_server", 0);
+      }
+*/
+      if (pweb->ppath->servers[pweb->ppath->server_no].psrv->offline == 0 && pweb->ppath->servers[pweb->ppath->server_no].exclusive == 0) {
          server_no = pweb->ppath->server_no;
       }
-      if (pweb->ppath->load_balancing || pweb->ppath->psrv[pweb->ppath->server_no]->offline == 1) { /* increment core server number if one is offline or load balancing is on */
+      if (pweb->ppath->load_balancing || pweb->ppath->servers[pweb->ppath->server_no].psrv->offline == 1) { /* increment core server number if one is offline or load balancing is on */
          pweb->ppath->server_no ++;
-         if (!pweb->ppath->psrv[pweb->ppath->server_no]) {
+         if (!pweb->ppath->servers[pweb->ppath->server_no].psrv) {
             pweb->ppath->server_no = 0;
          }
       }
@@ -1378,7 +1395,7 @@ int mg_server_offline(MGWEB *pweb, MGSRV *psrv, int context)
    if (!psrv || !pweb->ppath) {
       return -1;
    }
-   if (!pweb->ppath->psrv[1]) { /* only one server, therefore no failover */
+   if (!pweb->ppath->servers[1].psrv) { /* only one server, therefore no failover */
       return -1;
    }
 
@@ -1763,8 +1780,8 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
                server_no = (int) strtol(pv, NULL, 10);
             }
             else {
-               for (n = 0; pweb->ppath->servers[n]; n ++) {
-                  if (!strcmp(pweb->ppath->servers[n], pv)) {
+               for (n = 0; pweb->ppath->servers[n].name; n ++) {
+                  if (!strcmp(pweb->ppath->servers[n].name, pv)) {
                      server_no = n;
                      break;
                   }
@@ -1854,8 +1871,8 @@ int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned ch
                            server_no = (int) strtol(pv, NULL, 10);
                         }
                         else {
-                           for (n = 0; pweb->ppath->servers[n]; n ++) {
-                              if (!strcmp(pweb->ppath->servers[n], pv)) {
+                           for (n = 0; pweb->ppath->servers[n].name; n ++) {
+                              if (!strcmp(pweb->ppath->servers[n].name, pv)) {
                                  server_no = n;
                                  break;
                               }
@@ -1939,8 +1956,8 @@ int mg_find_sa_cookie(MGWEB *pweb)
                server_no = (int) strtol(pv, NULL, 10);
             }
             else {
-               for (n = 0; pweb->ppath->servers[n]; n ++) {
-                  if (!strcmp(pweb->ppath->servers[n], pv)) {
+               for (n = 0; pweb->ppath->servers[n].name; n ++) {
+                  if (!strcmp(pweb->ppath->servers[n].name, pv)) {
                      server_no = n;
                      break;
                   }
@@ -2174,10 +2191,10 @@ int mg_worker_exit()
 
 int mg_parse_config()
 {
-   int wn, vn, ln, n, len, lenx, line_len, size, inserver, inpath, incgi, inenv, eos;
-   char *pa, *pz, *peol, *p;
+   int wn, vn, ln, n, len, lenx, line_len, size, inserver, inpath, incgi, inenv, eos, ex;
+   char *pa, *pz, *peol, *p, *pprop;
    char *word[256];
-   char line[1024];
+   char line[1024], buffer[256];
    MGSRV *psrv, *psrv_prev;
    MGPATH *ppath, *ppath_prev;
 
@@ -2316,6 +2333,11 @@ __try {
                      break;
                   }
                   memset((void *) ppath, 0, sizeof(MGPATH));
+                  for (n = 0; n < 32; n ++) { /* v2.1.16 */
+                     ppath->servers[n].name = NULL;
+                     ppath->servers[n].psrv = NULL;
+                     ppath->servers[n].exclusive = 0;
+                  }
                   ppath->load_balancing = 0;
                   ppath->sa_cookie = NULL;
                   ppath->sa_order = 0;
@@ -2410,7 +2432,24 @@ __try {
                   else if (!strcmp(word[0], "servers")) {
                      for (n = 1; n < wn; n ++) {
                         if (ppath->srv_max < 30) {
-                           ppath->servers[ppath->srv_max ++] = word[n];
+                           /* v2.1.16 */
+                           ex = 0;
+                           pprop = strstr(word[n], ":");
+                           if (pprop) {
+                              *pprop = '\0';
+                              pprop ++;
+                              strncpy(buffer, pprop, 32);
+                              buffer[32] = '\0';
+                              mg_lcase(buffer);
+                              if (strstr(buffer, "ex")) {
+                                  ex = 1;
+                              }
+                           }
+                           if (word[n][0]) {
+                              ppath->servers[ppath->srv_max].name = word[n];
+                              ppath->servers[ppath->srv_max].exclusive = ex;
+                              ppath->srv_max ++;
+                           }
                         }
                      }
                   }
@@ -2678,28 +2717,28 @@ __try {
          sprintf(mg_system.config_error, "Missing database function from Location '%s'", ppath->name);
          break;
       }
-      if (!ppath->servers[0]) {
+      if (!ppath->servers[0].name) {
          sprintf(mg_system.config_error, "No DB Servers defined for Location '%s'", ppath->name);
          break;
       }
-      for (n = 0; ppath->servers[n]; n ++) {
+      for (n = 0; ppath->servers[n].name; n ++) {
          psrv = mg_server;
          while (psrv) {
-            if (!strcmp(ppath->servers[n], psrv->name)) {
-               ppath->psrv[n] = psrv;
+            if (!strcmp(ppath->servers[n].name, psrv->name)) {
+               ppath->servers[n].psrv = psrv;
                break;
             }
             psrv = psrv->pnext;
          }
          if (!psrv) {
-            sprintf(mg_system.config_error, "DB Server configuration for '%s' not found for Location '%s'", ppath->servers[n], ppath->name);
+            sprintf(mg_system.config_error, "DB Server configuration for '%s' not found for Location '%s'", ppath->servers[n].name, ppath->name);
             break;
          }
       }
       if (mg_system.config_error[0]) {
          break;
       }
-      if (!ppath->psrv[0] || !ppath->servers[0]) {
+      if (!ppath->servers[0].psrv || !ppath->servers[0].name) {
          sprintf(mg_system.config_error, "No DB Servers found for Location '%s'", ppath->name);
          break;
       }
@@ -2721,10 +2760,13 @@ __try {
          else {
             strcat(pbuf, "; SA variable=null");
          }
-         for (n = 0; ppath->servers[n]; n ++) {
+         for (n = 0; ppath->servers[n].name; n ++) {
             sprintf(buffer, "; server %d=", n);
             strcat(pbuf, buffer);
-            strcat(pbuf, ppath->servers[n]);
+            strcat(pbuf, ppath->servers[n].name);
+            if (ppath->servers[n].exclusive) {
+               strcat(pbuf, "(ex)");
+            }
          }
          mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: location", 0);
       }

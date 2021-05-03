@@ -1056,6 +1056,12 @@ typedef struct tagMGSRV {
    struct tagMGSRV   *pnext;
 } MGSRV, *LPMGSRV;
 
+/* v2.1.16 */
+typedef struct tagMGPSRV {
+   char        *name;
+   MGSRV       *psrv;
+   short       exclusive;
+} MGPSRV, *LPMGPSRV;
 
 typedef struct tagMGPATH {
    int         cgi_max;
@@ -1068,8 +1074,11 @@ typedef struct tagMGPATH {
    int         sa_order;
    char        *sa_cookie;
    char        *sa_variables[4];
+/*
    char        *servers[32];
    MGSRV       *psrv[32];
+*/
+   MGPSRV      servers[32]; /* v2.1.16 */
    char        *cgi[128];
    struct tagMGPATH  *pnext;
 } MGPATH, *LPMGPATH;
