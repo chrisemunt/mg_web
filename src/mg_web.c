@@ -96,6 +96,9 @@ Version 2.1.16 3 May 2021:
       DB Servers marked in this way are usually reserved to enable specific applications to be accessed through the hosting path.
       Example: servers LOCALA LOCALB:ex LOCALC
 
+Version 2.1.17 26 May 2021:
+   Make DB Server names case-insensitive in the configuration and in any server affinity variables.
+
 */
 
 
@@ -1758,9 +1761,10 @@ int mg_find_sa_variable(MGWEB *pweb)
 
 int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char *nvpairs, int nvpairs_len)
 {
-   int server_no, n;
+   int server_no, n, len;
    unsigned char cnvz;
    char *pn, *pv, *pz;
+   char sname[64];
 
    cnvz = nvpairs[nvpairs_len];
    nvpairs[nvpairs_len] = '\0';
@@ -1775,13 +1779,17 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
             if (pz) {
                *pz = '\0';
             }
+            len = (int) strlen(pv);
 
             if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
                server_no = (int) strtol(pv, NULL, 10);
             }
-            else {
+            else if (len < 60) { /* v2.1.17 */
                for (n = 0; pweb->ppath->servers[n].name; n ++) {
-                  if (!strcmp(pweb->ppath->servers[n].name, pv)) {
+                  /* v2.1.17 */
+                  strcpy(sname, pv);
+                  mg_lcase(sname);
+                  if (!strcmp(pweb->ppath->servers[n].lcname, sname)) {
                      server_no = n;
                      break;
                   }
@@ -1822,9 +1830,9 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
 /* v2.1.15 */
 int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned char *content, int content_len)
 {
-   int server_no, n, nc, nn, blen;
+   int server_no, n, nc, nn, blen, len;
    char *ph, *phz, *pn, *pnz, *pv, *pz;
-   char cname[64];
+   char cname[64], sname[64];
 /*
    mg_log_buffer(pweb->plog, pweb, (char *) content, content_len, "Multipart Payload", 0);
 */
@@ -1867,12 +1875,15 @@ int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned ch
                      }
 */
                      if (!strcmp(name, cname)) {
+                        len = (int) strlen(pv);
                         if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
                            server_no = (int) strtol(pv, NULL, 10);
                         }
-                        else {
+                        else if (len < 60) { /* v2.1.17 */
+                           strcpy(sname, pv);
+                           mg_lcase(sname);
                            for (n = 0; pweb->ppath->servers[n].name; n ++) {
-                              if (!strcmp(pweb->ppath->servers[n].name, pv)) {
+                              if (!strcmp(pweb->ppath->servers[n].lcname, sname)) {
                                  server_no = n;
                                  break;
                               }
@@ -2313,6 +2324,10 @@ __try {
                   psrv_prev = psrv;
                   psrv->name = word[1];
                   psrv->name_len = (int) strlen(psrv->name);
+                  /* v2.1.17 */
+                  strncpy(psrv->lcname, psrv->name, 60);
+                  psrv->lcname[60] = '\0';
+                  mg_lcase(psrv->lcname);
                }
             }
             else if (strstr(word[0], "location")) {
@@ -2447,6 +2462,10 @@ __try {
                            }
                            if (word[n][0]) {
                               ppath->servers[ppath->srv_max].name = word[n];
+                              /* v2.1.17 */
+                              strncpy(ppath->servers[ppath->srv_max].lcname, ppath->servers[ppath->srv_max].name, 60);
+                              ppath->servers[ppath->srv_max].lcname[60] = '\0';
+                              mg_lcase(ppath->servers[ppath->srv_max].lcname);
                               ppath->servers[ppath->srv_max].exclusive = ex;
                               ppath->srv_max ++;
                            }

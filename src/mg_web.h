@@ -1039,6 +1039,7 @@ typedef struct tagMGSRV {
    short       dbtype;
    short       offline;
    char        *name;
+   char        lcname[64]; /* v2.1.17 */
    int         name_len;
    char        *uci;
    char        *shdir;
@@ -1059,6 +1060,7 @@ typedef struct tagMGSRV {
 /* v2.1.16 */
 typedef struct tagMGPSRV {
    char        *name;
+   char        lcname[64]; /* v2.1.17 */
    MGSRV       *psrv;
    short       exclusive;
 } MGPSRV, *LPMGPSRV;
