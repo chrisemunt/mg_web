@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-3 May 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+26 May 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.1; Revision 16.
+* Current Release: Version: 2.1; Revision 17.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -204,3 +204,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.1.16 (3 May 2021)
 
 * Introduce a mechanism through which DB Servers can be excluded from Load-Balancing and Failover.  DB Servers marked in this way are usually reserved to enable specific applications to be accessed through the hosting path.
+
+### v2.1.17 (26 May 2021)
+
+* Make DB Server names case-insensitive in the configuration and in any server affinity variables.
+
