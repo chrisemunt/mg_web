@@ -88,6 +88,12 @@ typedef struct tagMGWEBNGINX {
    ngx_buf_t                     *output_buf_last;
    ngx_chain_t                   *output_head;
    ngx_chain_t                   *output_last;
+   /* v2.2.18 */
+   int                           request_buf_offset;
+   int                           request_buf_len;
+   size_t                        request_total;
+   ngx_buf_t                     *request_buf;
+   ngx_chain_t                   *request_head;
    unsigned int                  more_request_content;
    ngx_str_t                     thread_pool;
    char                          mg_thread_pool[64];
@@ -360,9 +366,12 @@ static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
 
    rc = mg_web((MGWEB *) pweb);
 
+   /* v2.2.18 */
+/*
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) pweb->request_clen, DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
    pweb->input_buf.len_used += 5;
    pweb->request_content = (char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used;
+*/
 
    rc = ngx_http_read_client_request_body(r, mg_payload_handler);
 
@@ -382,10 +391,12 @@ static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
 static void mg_payload_handler(ngx_http_request_t *r)
 {
    int rc;
+/*
    size_t len;
    ngx_buf_t *buf;
    ngx_chain_t *cl;
    size_t total;
+*/
    MGWEBNGINX *pwebnginx;
    MGWEB *pweb;
 
@@ -399,6 +410,63 @@ static void mg_payload_handler(ngx_http_request_t *r)
       return;
    }
 
+#if 1
+   /* v2.2.18 */
+/*
+   pwebnginx->request_total = 0;
+   pwebnginx->request_head = r->request_body->bufs;
+   pwebnginx->request_buf = NULL;
+   total = (size_t) mg_client_read(pweb, (unsigned char *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used), (int) pweb->request_clen);
+   pweb->input_buf.len_used += total;
+*/
+
+   pwebnginx->request_total = 0;
+   pwebnginx->request_head = r->request_body->bufs;
+   pwebnginx->request_buf = NULL;
+   pwebnginx->request_buf_len = 0;
+   pwebnginx->request_buf_offset = 0;
+
+   pweb->request_long = 0;
+   if (pweb->request_clen) {
+      /* v2.2.18 */
+      pweb->request_bsize = (pweb->input_buf.len_alloc - (pweb->input_buf.len_used + 15)); /* amount of buffer space available for request payload */
+      if (pweb->psrv->max_string_size < pweb->input_buf.len_alloc) {
+         pweb->request_bsize = (pweb->psrv->max_string_size - (pweb->input_buf.len_used + 15)); /* amount of buffer space available for request payload */
+         /* mg_log_event(pweb->plog, pweb, (char *) "******* Revise buffer size downwards *******", (char *) "HTTP Request Payload", 0); */
+      }
+/*
+      {
+         char bufferx[1024];
+         sprintf(bufferx, "HTTP Request: pweb->input_buf.len_used=%d (len_alloc=%d;max_string_size=%lu); pweb->request_clen=%d; payload_buffer_available=%d;", pweb->input_buf.len_used, pweb->input_buf.len_alloc, pweb->psrv->max_string_size, pweb->request_clen, pweb->request_bsize);
+         mg_log_event(pweb->plog, pweb, bufferx, (char *) "HTTP Request Payload", 0);
+      }
+*/
+      if (pweb->request_clen < pweb->request_bsize) {
+         pweb->request_content = (char *) pweb->input_buf.buf_addr + (pweb->input_buf.len_used + 5); /* space for content length */
+         pweb->request_bsize = (pweb->input_buf.len_alloc - pweb->input_buf.len_used);
+         mg_client_read(pweb, (unsigned char *) pweb->request_content, pweb->request_clen);
+         mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) pweb->request_clen, DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
+         pweb->input_buf.len_used += (pweb->request_clen + 5);
+      }
+      else { /* v2.2.18 */
+         pweb->request_long = 1;
+         pweb->request_content = (char *) pweb->input_buf.buf_addr + (pweb->input_buf.len_used + 20); /* space for headers EOF marker, content chunk length and param = '' AND 5 byte header for content itself */
+         pweb->request_clen_remaining = pweb->request_clen;
+         mg_client_read(pweb, (unsigned char *) pweb->request_content, pweb->request_bsize);
+         mg_add_block_size((unsigned char *) (pweb->request_content - 5), (unsigned long) 0, (unsigned long) pweb->request_bsize, DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
+         pweb->request_csize = pweb->request_bsize;
+         pweb->request_clen_remaining -= pweb->request_csize;
+/*
+         {
+            char bufferx[1024];
+            sprintf(bufferx, "HTTP Long Request 1: pweb->request_content=%p; pweb->input_buf.len_used=%d; pweb->request_clen=%d; pweb->request_clen_remaining=%d; clen_to_send=%d;", pweb->request_content, pweb->input_buf.len_used, pweb->request_clen, pweb->request_clen_remaining, pweb->request_bsize);
+            mg_log_buffer(pweb->plog, pweb, (pweb->request_content - 5), 30, bufferx, 0);
+         }
+*/
+      }
+   }
+
+#else
    total = 0;
    cl = r->request_body->bufs;
  
@@ -443,6 +511,7 @@ static void mg_payload_handler(ngx_http_request_t *r)
          cl = cl->next;
       }
    }
+#endif
 
 #if defined(NGX_THREADS)
    if (pwebnginx->thread_pool.len > 0) {
@@ -1321,15 +1390,81 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
+/* v2.2.18 */
 int mg_client_read(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
 {
-   int result;
+   int result, got, avail;
+   size_t len;
+   MGWEBNGINX *pwebnginx;
 
 #ifdef _WIN32
 __try {
 #endif
 
-   result = 0;
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+   got = 0;
+ 
+   if (pwebnginx->r->request_body->temp_file) {
+/*
+      {
+         char bufferx[256];
+         sprintf(bufferx, "request_clen=%d; buffer_size=%d; request_total=%lu;", pweb->request_clen, buffer_size, pwebnginx->request_total);
+         mg_log_event(&(mg_system.log), NULL, bufferx, "mg_payload_handler: temp_file", 0);
+      }
+*/
+      while ((len = ngx_read_file(&(pwebnginx->r->request_body->temp_file->file), pbuffer + got, buffer_size, pwebnginx->request_total)) > 0) {
+         pwebnginx->request_total += len;
+         got += len;
+         pbuffer += len;
+         buffer_size -= len;
+         if (buffer_size < 1) {
+            break;
+         }
+      }
+   }
+   else {  
+/*
+      {
+         char bufferx[256];
+         sprintf(bufferx, "request_clen=%d; buffer_size=%d; request_buf=%p; request_buf_len=%d; request_buf_offset=%d;", pweb->request_clen, buffer_size, pwebnginx->request_buf, pwebnginx->request_buf_len, pwebnginx->request_buf_offset);
+         mg_log_event(&(mg_system.log), NULL, bufferx, "mg_payload_handler: memory_chain", 0);
+      }
+*/
+      while (pwebnginx->request_head) {
+         if (pwebnginx->request_buf) {
+            avail = (pwebnginx->request_buf_len - pwebnginx->request_buf_offset);
+            if (avail >= buffer_size) {
+               memcpy((void *) (pbuffer + got), (char *) pwebnginx->request_buf->start, buffer_size);
+               got += buffer_size;
+               buffer_size = 0;
+               pwebnginx->request_buf_offset += buffer_size;
+            }
+            else if (avail) {
+               memcpy((void *) (pbuffer + got), (char *) pwebnginx->request_buf->start, avail);
+               got += avail;
+               buffer_size -= avail;
+               pwebnginx->request_buf_offset += avail;
+            }
+            if (buffer_size < 1) {
+               break;
+            }
+         }
+         pwebnginx->request_buf = pwebnginx->request_head->buf;
+         pwebnginx->request_buf_len = 0;
+         pwebnginx->request_buf_offset = 0;
+         if (pwebnginx->request_buf->pos) {
+            len = (int) (pwebnginx->request_buf->last - pwebnginx->request_buf->pos);
+            if (len == 0) {
+               len = pweb->request_clen;
+            }
+            pwebnginx->request_total += len;
+            pwebnginx->request_buf_len = len;
+         }
+         pwebnginx->request_head = pwebnginx->request_head->next;
+      }
+   }
+
+   result = (int) got;
 
    return result;
 
