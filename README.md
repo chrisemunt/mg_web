@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-26 May 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+18 June 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.1; Revision 17.
+* Current Release: Version: 2.2; Revision 18.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -101,9 +101,6 @@ Currently, you will find built solutions for Windows IIS (x64) and Apache (x86 a
 
 Full documentation for building, deploying and using **mg\_web** will be found in the package: **/doc/mg\_web.pdf**
 
-## Things for the future...
-
-* The ability to handle request payloads that exceed the maximum DB Server string size.
 
 ## License
 
@@ -208,4 +205,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.1.17 (26 May 2021)
 
 * Make DB Server names case-insensitive in the configuration and in any server affinity variables.
+
+### v2.2.18 (18 June 2021)
+
+* Introduce support for request payloads that exceed the maximum string length of the target DB Server.
+	* This enhancement requires DB Superserver version 4.3; Revision 22 (or later).
 
