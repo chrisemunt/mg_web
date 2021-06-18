@@ -461,7 +461,13 @@ __try {
       pbuffer[total] = '\0';
       result = (int) total;
 	}
-
+/*
+   {
+      char buffer[256];
+      sprintf_s(buffer, 255, "buffer_size=%d; total=%d;", buffer_size, result);
+      mg_log_event(pweb->plog, pweb, buffer, "mg_client_read", 0);
+   }
+*/
    return result;
 
 #ifdef _WIN32
