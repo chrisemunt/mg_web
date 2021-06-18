@@ -99,6 +99,10 @@ Version 2.1.16 3 May 2021:
 Version 2.1.17 26 May 2021:
    Make DB Server names case-insensitive in the configuration and in any server affinity variables.
 
+Version 2.2.18 18 June 2021:
+   Introduce support for request payloads that exceed the maximum string length of the target DB Server.
+	   This enhancement requires DB Superserver version 4.3; Revision 22 (or later).
+
 */
 
 
@@ -263,17 +267,70 @@ __try {
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBSYS, DBX_DTYPE_STR);
    pweb->input_buf.len_used += (len + 5);
 
+   /* v2.2.18 */
+   memset((void *) buffer, 0, 15);
+   strcpy(buffer, "key=");
+   len = 14;
+   p = (unsigned char *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used + 5);
+   memcpy((void *) p, (void *) buffer, 14);
+   pweb->requestkey = (char *) (p + 4);
+   mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBSYS, DBX_DTYPE_STR);
+   pweb->input_buf.len_used += (len + 5);
+
+   /* v2.2.18 */
+   strcpy(buffer, "mode=tcp");
+   len = 8;
+   p = (unsigned char *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used + 5);
+   strcpy((char *) p, buffer);
+   pweb->mode = (char *) (p + 5);
+   mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBSYS, DBX_DTYPE_STR);
+   pweb->input_buf.len_used += (len + 5);
+
+
    rc = mg_websocket_check(pweb);
 
    if (pweb->evented) {
       return rc;
    }
 
+   pweb->request_long = 0;
    if (pweb->request_clen) {
-      pweb->request_content = (char *) pweb->input_buf.buf_addr + (pweb->input_buf.len_used + 5);
-      mg_client_read(pweb, (unsigned char *) pweb->request_content, pweb->request_clen);
-      mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) pweb->request_clen, DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
-      pweb->input_buf.len_used += (pweb->request_clen + 5);
+      /* v2.2.18 */
+      pweb->request_bsize = (pweb->input_buf.len_alloc - (pweb->input_buf.len_used + 15)); /* amount of buffer space available for request payload */
+      if (pweb->psrv->max_string_size < pweb->input_buf.len_alloc) {
+         pweb->request_bsize = (pweb->psrv->max_string_size - (pweb->input_buf.len_used + 15)); /* amount of buffer space available for request payload */
+         /* mg_log_event(pweb->plog, pweb, (char *) "******* Revise buffer size downwards *******", (char *) "HTTP Request Payload", 0); */
+      }
+/*
+      {
+         char bufferx[1024];
+         sprintf(bufferx, "HTTP Request: pweb->input_buf.len_used=%d (len_alloc=%d;max_string_size=%lu); pweb->request_clen=%d; payload_buffer_available=%d;", pweb->input_buf.len_used, pweb->input_buf.len_alloc, pweb->psrv->max_string_size, pweb->request_clen, pweb->request_bsize);
+         mg_log_event(pweb->plog, pweb, bufferx, (char *) "HTTP Request Payload", 0);
+      }
+*/
+      if (pweb->request_clen < pweb->request_bsize) {
+         pweb->request_content = (char *) pweb->input_buf.buf_addr + (pweb->input_buf.len_used + 5); /* space for content length */
+         pweb->request_bsize = (pweb->input_buf.len_alloc - pweb->input_buf.len_used);
+         mg_client_read(pweb, (unsigned char *) pweb->request_content, pweb->request_clen);
+         mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) pweb->request_clen, DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
+         pweb->input_buf.len_used += (pweb->request_clen + 5);
+      }
+      else { /* v2.2.18 */
+         pweb->request_long = 1;
+         pweb->request_content = (char *) pweb->input_buf.buf_addr + (pweb->input_buf.len_used + 20); /* space for headers EOF marker, content chunk length and param = '' AND 5 byte header for content itself */
+         pweb->request_clen_remaining = pweb->request_clen;
+         mg_client_read(pweb, (unsigned char *) pweb->request_content, pweb->request_bsize);
+         mg_add_block_size((unsigned char *) (pweb->request_content - 5), (unsigned long) 0, (unsigned long) pweb->request_bsize, DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
+         pweb->request_csize = pweb->request_bsize;
+         pweb->request_clen_remaining -= pweb->request_csize;
+/*
+         {
+            char bufferx[1024];
+            sprintf(bufferx, "HTTP Long Request 1: pweb->request_content=%p; pweb->input_buf.len_used=%d; pweb->request_clen=%d; pweb->request_clen_remaining=%d; clen_to_send=%d;", pweb->request_content, pweb->input_buf.len_used, pweb->request_clen, pweb->request_clen_remaining, pweb->request_bsize);
+            mg_log_buffer(pweb->plog, pweb, (pweb->request_content - 5), 30, bufferx, 0);
+         }
+*/
+      }
    }
 
    rc = mg_web_process(pweb);
@@ -401,6 +458,18 @@ mg_web_process_failover:
    strncpy(pweb->server, pweb->psrv->name, pweb->psrv->name_len);
    pweb->server[pweb->psrv->name_len] = '\0';
    mg_set_size((unsigned char *) pweb->requestno, pweb->requestno_in);
+   if (pweb->request_long) { /* v2.2.18 */
+      mg_set_size((unsigned char *) pweb->requestkey, (unsigned long) mg_current_process_id());
+      mg_set_size((unsigned char *) (pweb->requestkey + 4), (unsigned long) pweb->requestno_in);
+      sprintf(pweb->key, "%lu:%lu", (unsigned long) mg_current_process_id(), (unsigned long) pweb->requestno_in);
+/*
+      {
+         char bufferx[1024];
+         sprintf(bufferx, "HTTP Long Request: pid=%ld; req_no=%ld; key=%s", (unsigned long) mg_current_process_id(), (unsigned long) pweb->requestno_in, pweb->key);
+         mg_log_buffer(pweb->plog, pweb, pweb->requestkey, 10, bufferx, 0);
+      }
+*/
+   }
 
 /*
    {
@@ -766,14 +835,14 @@ __try {
    /* v2.1.10 */
 
    if (pcon->net_connection) {
+      memcpy((void *) pweb->mode, (void *) "tcp", (size_t) 3);
       rc = netx_tcp_command(pweb, DBX_CMND_FUNCTION, 0);
    }
    else if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
 
       ydb_string_t out, in1, in2, in3;
-/*
-      ydb_buffer_t out, in1, in2, in3;
-*/
+
+      memcpy((void *) pweb->mode, (void *) "api", (size_t) 3);
       pweb->failover_possible = 0;
       strcat(fun.label, "_zmgsis");
       fun.label_len = (int) strlen(label);
@@ -789,24 +858,12 @@ __try {
       in3.address = (char *) params;
       in3.length = (unsigned long) strlen(params);
 
-/*
-      out.buf_addr = (char *) pweb->output_val.svalue.buf_addr;
-      out.len_used = (unsigned long) 0;
-      out.len_alloc = (unsigned long) pweb->output_val.svalue.len_alloc;
-
-      in1.buf_addr = (char *) buffer;
-      in1.len_used = (unsigned long) strlen(buffer);
-      in1.len_alloc = in1.len_used + 1;
-
-      in2.buf_addr = (char *) netbuf;
-      in2.len_used = (unsigned long) netbuf_used;
-      in2.len_alloc = in2.len_used + 1;
-
-      in3.buf_addr = (char *) params;
-      in3.len_used = (unsigned long) strlen(params);
-      in3.len_alloc = in3.len_used + 1;
-*/
       DBX_LOCK(0);
+
+      if (pweb->request_long) { /* v2.2.18 */
+         rc = mg_execute_request_long(pweb, mg_write_chunk_ydb);
+      }
+
       rc = pcon->p_ydb_so->p_ydb_ci(fun.label, &out, &in1, &in2, &in3);
 
 /*
@@ -848,26 +905,76 @@ __try {
       DBX_UNLOCK();
    }
    else {
+      unsigned long ne;
+      DBXCVAL cvalue;
+
+      memcpy((void *) pweb->mode, (void *) "api", (size_t) 3);
       pweb->failover_possible = 0;
       strcpy(buffer, "");
+      cvalue.pstr = NULL;
 
       DBX_LOCK(0);
+
+      if (pweb->request_long) { /* v2.2.18 */
+         rc = mg_execute_request_long(pweb, mg_write_chunk_isc);
+      }
+
       rc = pcon->p_isc_so->p_CachePushFunc(&(fun.rflag), (int) fun.label_len, (const Callin_char_t *) fun.label, (int) fun.routine_len, (const Callin_char_t *) fun.routine);
       if (rc == CACHE_SUCCESS) {
          rc = pcon->p_isc_so->p_CachePushStr((int) strlen(buffer), (Callin_char_t *) buffer);
          if (rc == CACHE_SUCCESS) {
-            rc = pcon->p_isc_so->p_CachePushStr((int) netbuf_used, (Callin_char_t *) netbuf);
+            if (netbuf_used < CACHE_MAXSTRLEN) { /* v2.2.18 */
+               rc = pcon->p_isc_so->p_CachePushStr((int) netbuf_used, (Callin_char_t *) netbuf);
+            }
+            else {
+               cvalue.pstr = (void *) pcon->p_isc_so->p_CacheExStrNew((CACHE_EXSTRP) &(cvalue.zstr), netbuf_used + 1);
+               if (cvalue.pstr) {
+                  for (ne = 0; ne < netbuf_used; ne ++) {
+                     cvalue.zstr.str.ch[ne] = (char) netbuf[ne];
+                  }
+                  cvalue.zstr.str.ch[ne] = (char) 0;
+                  cvalue.zstr.len = netbuf_used;
+                  rc = pcon->p_isc_so->p_CachePushExStr((CACHE_EXSTRP) &(cvalue.zstr));
+               }
+               else {
+                  rc = CACHE_FAILURE;
+               }
+            }
+/*
+            {
+               char bufferx[1024];
+               sprintf(bufferx, "p_CachePush[Ex]Str: rc=%d; netbuf_used=%lu; cvalue.pstr=%p;", rc, netbuf_used, cvalue.pstr);
+               mg_log_event(pweb->plog, pweb, bufferx, "web_execute", 0);
+            }
+*/
             if (rc == CACHE_SUCCESS) {
                rc = pcon->p_isc_so->p_CachePushStr((int) strlen(params), (Callin_char_t *) params);
                if (rc == CACHE_SUCCESS) {
                   rc = pcon->p_isc_so->p_CacheExtFun(fun.rflag, 3);
                }
             }
+            if (cvalue.pstr) {
+               pcon->p_isc_so->p_CacheExStrKill(&(cvalue.zstr));
+            }
          }
       }
-
+/*
+      {
+         char bufferx[1024];
+         sprintf(bufferx, "p_CacheExtFun: rc=%d; cvalue.pstr=%p;", rc, cvalue.pstr);
+         mg_log_event(pweb->plog, pweb, bufferx, "web_execute", 0);
+      }
+*/
       if (rc == CACHE_SUCCESS) {
          isc_pop_value(pcon, &(pweb->output_val), DBX_DTYPE_STR);
+/*
+         {
+            char bufferx[1024];
+            sprintf(bufferx, "isc_pop_value: len_used=%d; api_size=%d; len_alloc=%d", pweb->output_val.svalue.len_used, pweb->output_val.api_size, pweb->output_val.svalue.len_alloc);
+            mg_log_event(pweb->plog, pweb, bufferx, "web_execute", 0);
+            mg_log_buffer(pweb->plog, pweb, (char *) pweb->output_val.svalue.buf_addr, pweb->output_val.svalue.len_used, "web_execute", 0);
+         }
+*/
          pweb->response_size = (pweb->output_val.api_size - 5);
          if (pweb->response_size > (unsigned int) (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE)) {
             get = (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE);
@@ -944,6 +1051,327 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    return 0;
 }
+#endif
+}
+
+
+int mg_execute_request_long(MGWEB *pweb, int (*p_write_chunk) (MGWEB *, unsigned char *, unsigned int, int))
+{
+   int rc, blen, bsize, ptr, tail_ptr, tail_len, chunk_no;
+   unsigned int netbuf_used;
+   unsigned char *netbuf;
+
+#ifdef _WIN32
+__try {
+#endif
+
+   blen = (int) strlen(pweb->boundary);
+   pweb->failover_possible = 0; /* can't failover after this point */
+   netbuf = (unsigned char *) (pweb->request_content - 5);
+   chunk_no = 0;
+   while (1) {
+      netbuf_used = pweb->request_csize + 5;
+      tail_ptr = 0;
+      tail_len = 0;
+      if (blen && blen > pweb->request_csize) {
+         for (ptr = (pweb->request_csize - blen) + 1; ptr < pweb->request_csize; ptr ++) {
+            if (!strncmp(pweb->request_content + ptr, pweb->boundary, pweb->request_csize - ptr)) {
+               if (pweb->request_content[ptr - 1] == '-' && pweb->request_content[ptr - 2] == '-') {
+                  tail_ptr = ptr;
+                  tail_len = pweb->request_csize - tail_ptr;
+                  netbuf_used -= tail_len;
+                  mg_add_block_size((unsigned char *) netbuf, (unsigned long) 0, (unsigned long) (pweb->request_csize - tail_len), DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
+               }
+            }
+         }
+      }
+      chunk_no ++;
+/*
+      {
+         char bufferx[1024];
+         sprintf(bufferx, "HTTP Long Request 2: chunk_no=%d; pweb->request_content=%p; pweb->input_buf.len_used=%d; pweb->request_clen=%d; pweb->request_clen_remaining=%d; clen_to_send (+5)=%d; tail_ptr=%d; tail_len=%d;", chunk_no, pweb->request_content, pweb->input_buf.len_used, pweb->request_clen, pweb->request_clen_remaining, netbuf_used, tail_ptr, tail_len);
+         mg_log_buffer(pweb->plog, pweb, netbuf, 30, bufferx, 0);
+         mg_log_event(pweb->plog, pweb, bufferx, "HTTP Long Request 2", 0);
+      }
+*/
+      rc = p_write_chunk(pweb, (unsigned char *) netbuf, netbuf_used, chunk_no);
+      if (rc < 0) {
+         break;
+      }
+      if (pweb->request_clen_remaining == 0) {
+         rc = CACHE_SUCCESS;
+         break;
+      }
+
+      bsize = pweb->request_bsize;
+      if (tail_ptr) {
+         bsize -= tail_len;
+         mg_memcpy((void *) pweb->request_content, (void *) (pweb->request_content + tail_ptr), (size_t) tail_len);
+      }
+
+      pweb->request_csize = pweb->request_clen_remaining;
+      if (pweb->request_csize > bsize) {
+         pweb->request_csize = bsize;
+      }
+
+      mg_client_read(pweb, (unsigned char *) (pweb->request_content + tail_len), pweb->request_csize);
+      mg_add_block_size((unsigned char *) netbuf, 0, (pweb->request_csize + tail_len), DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
+      pweb->request_clen_remaining -= pweb->request_csize;
+   }
+
+   return rc;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_web_execute_request_long: %x", code);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER ) {
+      ;
+   }
+
+   return CACHE_FAILURE;
+}
+#endif
+}
+
+
+int mg_write_chunk_tcp(MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no)
+{
+   int rc;
+
+   rc = netx_tcp_write(pweb, (unsigned char *) netbuf, (int) netbuf_used);
+   return rc;
+}
+
+
+int mg_write_chunk_isc(MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no)
+{
+#if 1
+
+   int rc, option;
+   char label[32], routine[32];
+   DBXFUN fun;
+   unsigned long ne;
+   DBXCVAL cvalue;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
+/*
+   {
+      char bufferx[1024];
+      sprintf(bufferx, "mg_write_chunk_isc: chunk_no=%d; key=%s", chunk_no, pweb->key);
+      mg_log_buffer(pweb->plog, pweb, netbuf, 32, "mg_write_chunk_isc", 0);
+   }
+*/
+
+   /* dbxwebsn(key,cn,data,option) */
+   rc = CACHE_SUCCESS;
+   option = 0;
+   strcpy(label, "dbxwebsn");
+
+   strcpy(routine, "%zmgsis");
+   fun.label = label;
+   fun.label_len = (int) strlen(label);
+   fun.routine = routine;
+   fun.routine_len = (int) strlen(routine);
+
+   rc = pcon->p_isc_so->p_CachePushFunc(&(fun.rflag), (int) fun.label_len, (const Callin_char_t *) fun.label, (int) fun.routine_len, (const Callin_char_t *) fun.routine);
+   if (rc == CACHE_SUCCESS) {
+      rc = pcon->p_isc_so->p_CachePushStr((int) strlen(pweb->key), (Callin_char_t *) pweb->key);
+      if (rc == CACHE_SUCCESS) {
+         rc = pcon->p_isc_so->p_CachePushInt((int) chunk_no);
+         if (rc == CACHE_SUCCESS) {
+            cvalue.pstr = (void *) pcon->p_isc_so->p_CacheExStrNew((CACHE_EXSTRP) &(cvalue.zstr), (netbuf_used - 5) + 1);
+            if (cvalue.pstr) {
+               for (ne = 5; ne < netbuf_used; ne ++) {
+                  cvalue.zstr.str.ch[ne - 5] = (char) netbuf[ne];
+               }
+               cvalue.zstr.str.ch[ne - 5] = (char) 0;
+               cvalue.zstr.len = (netbuf_used - 5);
+               rc = pcon->p_isc_so->p_CachePushExStr((CACHE_EXSTRP) &(cvalue.zstr));
+               if (rc == CACHE_SUCCESS) {
+                  rc = pcon->p_isc_so->p_CachePushInt((int) option);
+                  if (rc == CACHE_SUCCESS) {
+                     rc = pcon->p_isc_so->p_CacheExtFun(fun.rflag, 4);
+/*
+                     {
+                        char bufferx[1024];
+                        sprintf(bufferx, "mg_write_chunk_isc: p_CacheExtFun=%d; chunk_no=%d; key=%s", rc, chunk_no, pweb->key);
+                        mg_log_event(pweb->plog, pweb, bufferx, "mg_write_chunk_isc", 0);
+                     }
+*/
+                     if (rc == CACHE_SUCCESS) {
+                        rc = pcon->p_isc_so->p_CachePopInt(&option);
+                     }
+                  }
+               }
+            }
+         }
+      }
+   }
+   if (cvalue.pstr) {
+      pcon->p_isc_so->p_CacheExStrKill(&(cvalue.zstr));
+   }
+
+   return rc;
+
+#else
+
+   int rc;
+   char global[32];
+   unsigned long ne;
+   DBXCVAL cvalue;
+   DBXCON *pcon;
+
+   pcon = pweb->pcon;
+   strcpy(global, "mgweb");
+
+   if (chunk_no == 1) {
+      rc = pcon->p_isc_so->p_CachePushGlobal((int) strlen(global), (const Callin_char_t *) global);
+      if (rc == CACHE_SUCCESS) {
+         rc = pcon->p_isc_so->p_CachePushStr((int) strlen(pweb->key), (Callin_char_t *) pweb->key);
+         if (rc == CACHE_SUCCESS) {
+            rc = pcon->p_isc_so->p_CacheGlobalKill(1, 0);
+/*
+            {
+               char bufferx[1024];
+               sprintf(bufferx, "mg_write_chunk_isc: p_CacheGlobalKill=%d; chunk_no=%d; key=%s", rc, chunk_no, pweb->key);
+               mg_log_event(pweb->plog, pweb, bufferx, "mg_write_chunk_isc", 0);
+            }
+*/
+         }
+      }
+   }
+
+   rc = pcon->p_isc_so->p_CachePushGlobal((int) strlen(global), (const Callin_char_t *) global);
+   if (rc == CACHE_SUCCESS) {
+      rc = pcon->p_isc_so->p_CachePushStr((int) strlen(pweb->key), (Callin_char_t *) pweb->key);
+      if (rc == CACHE_SUCCESS) {
+         rc = pcon->p_isc_so->p_CachePushInt((int) chunk_no);
+         if (rc == CACHE_SUCCESS) {
+            cvalue.pstr = (void *) pcon->p_isc_so->p_CacheExStrNew((CACHE_EXSTRP) &(cvalue.zstr), netbuf_used + 1);
+            if (cvalue.pstr) {
+               for (ne = 0; ne < netbuf_used; ne ++) {
+                  cvalue.zstr.str.ch[ne] = (char) netbuf[ne];
+               }
+               cvalue.zstr.str.ch[ne] = (char) 0;
+               cvalue.zstr.len = netbuf_used;
+               rc = pcon->p_isc_so->p_CachePushExStr((CACHE_EXSTRP) &(cvalue.zstr));
+               if (rc == CACHE_SUCCESS) {
+                  rc = pcon->p_isc_so->p_CacheGlobalSet(2);
+/*
+                  {
+                     char bufferx[1024];
+                     sprintf(bufferx, "mg_write_chunk_isc: p_CacheGlobalSet=%d; chunk_no=%d; key=%s", rc, chunk_no, pweb->key);
+                     mg_log_event(pweb->plog, pweb, bufferx, "mg_write_chunk_isc", 0);
+                  }
+*/
+               }
+            }
+         }
+      }
+   }
+   if (cvalue.pstr) {
+      pcon->p_isc_so->p_CacheExStrKill(&(cvalue.zstr));
+   }
+
+   return rc;
+
+#endif
+}
+
+
+int mg_write_chunk_ydb(MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no)
+{
+#if 1
+
+   int rc, option;
+   char label[32], param[32], obuffer[32];
+   DBXFUN fun;
+   DBXCON *pcon;
+   ydb_string_t out, in1, in2, in3;
+
+   pcon = pweb->pcon;
+/*
+   {
+      char bufferx[1024];
+      sprintf(bufferx, "mg_write_chunk_ydb: chunk_no=%d; key=%s", chunk_no, pweb->key);
+      mg_log_buffer(pweb->plog, pweb, (char *) netbuf, 32, bufferx, 0);
+   }
+*/
+   /* dbxwebsn(key,cn,data,option) */
+   rc = CACHE_SUCCESS;
+   option = 0;
+   sprintf(param, "websn:%d:%d", chunk_no, option);
+   strcpy(label, "ifc_zmgsis");
+   fun.label = label;
+   fun.label_len = (int) strlen(label);
+
+   out.address = (char *) obuffer;
+   out.length = (unsigned long) sizeof(obuffer);
+   in1.address = (char *) pweb->key;
+   in1.length = (unsigned long) strlen(pweb->key);
+   in2.address = (char *) (netbuf + 5);
+   in2.length = (unsigned long) (netbuf_used - 5);
+   in3.address = (char *) param;
+   in3.length = (unsigned long) strlen(param);
+
+   rc = pcon->p_ydb_so->p_ydb_ci(fun.label, &out, &in1, &in2, &in3);
+/*
+   {
+      char bufferx[1024];
+      sprintf(bufferx, "mg_write_chunk_ydb: rc=%d; chunk_no=%d; key=%s", rc, chunk_no, pweb->key);
+      mg_log_event(pweb->plog, pweb, bufferx, "mg_write_chunk_isc", 0);
+   }
+*/
+   return rc;
+
+#else
+
+   int rc;
+   char global[32], buffer[32];
+   DBXCON *pcon;
+   ydb_buffer_t subs[4], glo, data;
+
+   pcon = pweb->pcon;
+   strcpy(global, "^mgweb");
+
+   glo.buf_addr = (char *) global;
+   glo.len_used = (unsigned long) strlen(global);
+   glo.len_alloc = glo.len_used;
+
+   if (chunk_no == 1) {
+      subs[0].buf_addr = (char *) pweb->key;
+      subs[0].len_used = (unsigned long) strlen(pweb->key);
+      subs[0].len_alloc = subs[0].len_used;
+
+      rc = pcon->p_ydb_so->p_ydb_delete_s(&glo, 1, &subs[0], YDB_DEL_TREE);
+   }
+
+   sprintf(buffer, "%d", chunk_no);
+   subs[0].buf_addr = (char *) pweb->key;
+   subs[0].len_used = (unsigned long) strlen(pweb->key);
+   subs[0].len_alloc = subs[0].len_used;
+   subs[1].buf_addr = (char *) buffer;
+   subs[1].len_used = (unsigned long) strlen(buffer);
+   subs[1].len_alloc = subs[1].len_used;
+
+   data.buf_addr = (char *) netbuf;
+   data.len_used = (unsigned long) netbuf_used;
+   data.len_alloc = data.len_used;
+
+   rc = pcon->p_ydb_so->p_ydb_set_s(&glo, 2, &subs[0], &data);
+
+   return rc;
+
 #endif
 }
 
@@ -1581,6 +2009,10 @@ MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen)
       len_alloc = mg_system.request_buffer_size;
    }
 
+   if (len_alloc > DBX_LS_MAXSIZE_ISC) { /* v2.2.18 */
+      len_alloc = DBX_LS_BUFFER_ISC;
+   }
+
    pweb = (MGWEB *) mg_malloc(NULL, sizeof(MGWEB) + (len_alloc + 32), 0);
    if (!pweb) {
       return NULL;
@@ -1831,7 +2263,7 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
 int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned char *content, int content_len)
 {
    int server_no, n, nc, nn, blen, len;
-   char *ph, *phz, *pn, *pnz, *pv, *pz;
+   char *ph, *phz, *pn, *pv, *pz;
    char cname[64], sname[64];
 /*
    mg_log_buffer(pweb->plog, pweb, (char *) content, content_len, "Multipart Payload", 0);
@@ -1841,7 +2273,7 @@ int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned ch
    for (nc = 0; nc < (content_len - 3); nc ++) {
       if (content[nc] == '-' && content[nc + 1] == '-') {
          if (!strncmp((char *) (content + (nc + 2)), pweb->boundary, blen)) {
-            ph = content + (nc + blen + 4); /* section header starts here */
+            ph = (char *) (content + (nc + blen + 4)); /* section header starts here */
             phz = strstr(ph, "\r\n\r\n"); /* section header ends here */
             if (phz) {
                *phz = '\0';
@@ -1852,10 +2284,9 @@ int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned ch
                   pn = strstr(ph, "name=");
                   if (pn) {
                      pn += 5;
-                     if ((*pn) = '\"') {
+                     if ((*pn) == '\"') {
                         pn ++;
                      }
-                     pnz = pn;
                      nn = 0;
                      cname[0] = '\0';
                      while ((*pn)) {
@@ -2672,13 +3103,20 @@ __try {
          break;
       }
       else {
+         /* v2.2.18 */
          mg_lcase(psrv->dbtype_name);
-         if (!strcmp(psrv->dbtype_name, "iris"))
+         if (!strcmp(psrv->dbtype_name, "iris")) {
             psrv->dbtype = DBX_DBTYPE_IRIS;
-         else if (!strcmp(psrv->dbtype_name, "cache"))
+            psrv->max_string_size = DBX_LS_BUFFER_ISC;
+         }
+         else if (!strcmp(psrv->dbtype_name, "cache")) {
             psrv->dbtype = DBX_DBTYPE_CACHE;
-         else if (!strcmp(psrv->dbtype_name, "yottadb"))
+            psrv->max_string_size = DBX_LS_BUFFER_ISC;
+         }
+         else if (!strcmp(psrv->dbtype_name, "yottadb")) {
             psrv->dbtype = DBX_DBTYPE_YOTTADB;
+            psrv->max_string_size = DBX_LS_BUFFER_YDB;
+         }
          else {
             sprintf(mg_system.config_error, "Unrecognized database name (%s) specified for DB Server '%s'", psrv->dbtype_name, psrv->name);
          }
@@ -3664,13 +4102,19 @@ int isc_pop_value(DBXCON *pcon, DBXVAL *value, int required_type)
       rc = pcon->p_isc_so->p_CachePopStr((int *) &(value->api_size), (Callin_char_t **) &(value->num.str));
       value->cvalue.pstr = NULL;
    }
+
+   /* v2.2.18 */
 /*
 {
    char bufferx[256];
    sprintf(bufferx, "isc_pop_value: rc=%d; ex=%d; value->api_size=%d; value->num.str=%p; value->cvalue.pstr=%p;", rc, ex, value->api_size, value->num.str, value->cvalue.pstr);
    mg_log_event(mg_system.plog, NULL, bufferx, "isc_pop_value", 0);
+   if (value->num.str) {
+      mg_log_buffer(mg_system.plog, NULL, value->num.str, 16, "isc_pop_value", 0);
+   }
 }
 */
+
    return rc;
 }
 
@@ -4739,6 +5183,21 @@ int mg_free(void *pweb_server, void *p, short id)
    return 0;
 }
 
+
+/* copy with possible overlap */
+int mg_memcpy(void * to, void *from, size_t size)
+{
+   int n;
+   char *p1, *p2;
+
+   p1 = (char *) to;
+   p2 = (char *) from;
+
+   for (n = 0; n < (int) size; n ++) {
+      *p1 ++ = *p2 ++;
+   }
+   return 0;
+}
 
 
 int mg_ucase(char *string)
@@ -6245,6 +6704,20 @@ netx_tcp_command_reconnect:
          }
          reconnect = 1;
          goto netx_tcp_command_reconnect;
+      }
+   }
+
+   if (pweb->request_long) { /* v2.2.18 */
+
+      rc = mg_execute_request_long(pweb, mg_write_chunk_tcp);
+
+      if (rc < 0) {
+         return rc;
+      }
+      mg_add_block_size((unsigned char *) netbuf, 0, 0, DBX_DSORT_EOD, DBX_DTYPE_STR8);
+      rc = netx_tcp_write(pweb, (unsigned char *) netbuf, 5);
+      if (rc < 0) {
+         return rc;
       }
    }
 

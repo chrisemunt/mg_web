@@ -311,8 +311,11 @@ typedef int    xc_status_t;
 #define DBX_MAXSIZE              32767
 #define DBX_BUFFER               32768
 
-#define DBX_LS_MAXSIZE           3641144
-#define DBX_LS_BUFFER            3641145
+#define DBX_LS_MAXSIZE_ISC       3641144
+#define DBX_LS_BUFFER_ISC        3641145
+
+#define DBX_LS_MAXSIZE_YDB       1048576
+#define DBX_LS_BUFFER_YDB        1048577
 
 #if defined(MAX_PATH) && (MAX_PATH>511)
 #define DBX_MAX_PATH             MAX_PATH
@@ -1036,24 +1039,25 @@ typedef struct tagDBXGTMSO {
 
 
 typedef struct tagMGSRV {
-   short       dbtype;
-   short       offline;
-   char        *name;
-   char        lcname[64]; /* v2.1.17 */
-   int         name_len;
-   char        *uci;
-   char        *shdir;
-   char        *ip_address;
-   int         port;
-   int         timeout;
-   int         nagle_algorithm;
-   char        *username;
-   char        *password;
-   char        *input_device;
-   char        *output_device;
-   char        *dbtype_name;
-   MGBUF       *penv;
-   int         net_connection;
+   short             dbtype;
+   short             offline;
+   char              *name;
+   char              lcname[64]; /* v2.1.17 */
+   int               name_len;
+   char              *uci;
+   char              *shdir;
+   char              *ip_address;
+   int               port;
+   int               timeout;
+   int               nagle_algorithm;
+   unsigned long     max_string_size; /* v2.2.18 */
+   char              *username;
+   char              *password;
+   char              *input_device;
+   char              *output_device;
+   char              *dbtype_name;
+   MGBUF             *penv;
+   int               net_connection;
    struct tagMGSRV   *pnext;
 } MGSRV, *LPMGSRV;
 
@@ -1212,7 +1216,11 @@ typedef struct tagMGWEB {
    int            http_version_minor;
    int            wserver_chunks_response;
    int            failover_possible;
+   int            request_long; /* v2.2.18 */
    int            request_clen;
+   int            request_clen_remaining; /* v2.2.18 */
+   int            request_csize; /* v2.2.18 */
+   int            request_bsize; /* v2.2.18 */
    char           *request_content;
    char           *script_name;
    int            script_name_len;
@@ -1239,6 +1247,9 @@ typedef struct tagMGWEB {
    char           *requestno;
    char           *server;
    char           *serverno;
+   char           *requestkey;
+   char           *mode;
+   char           key[32];
    unsigned char  db_chunk_head[8];
    DBXLOG         *plog;
    DBXSTR         input_buf;
@@ -1312,6 +1323,10 @@ int                     mg_web                        (MGWEB *pweb);
 int                     mg_web_process                (MGWEB *pweb);
 int                     mg_parse_headers              (MGWEB *pweb);
 int                     mg_web_execute                (MGWEB *pweb);
+int                     mg_execute_request_long       (MGWEB *pweb, int (*p_write_chunk) (MGWEB *, unsigned char *, unsigned int, int));
+int                     mg_write_chunk_tcp            (MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no);
+int                     mg_write_chunk_isc            (MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no);
+int                     mg_write_chunk_ydb            (MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no);
 int                     mg_web_http_error             (MGWEB *pweb, int http_status_code, int custompage);
 int                     mg_get_all_cgi_variables      (MGWEB *pweb);
 int                     mg_get_path_configuration     (MGWEB *pweb);
@@ -1364,6 +1379,7 @@ int                     mg_buf_cat                    (MGBUF *p_buf, char * uffe
 void *                  mg_malloc                     (void *pweb_server, int size, short id);
 void *                  mg_realloc                    (void *pweb_server, void *p, int curr_size, int new_size, short id);
 int                     mg_free                       (void *pweb_server, void *p, short id);
+int                     mg_memcpy                     (void * to, void *from, size_t size);
 
 int                     mg_ucase                      (char *string);
 int                     mg_lcase                      (char *string);
