@@ -103,6 +103,10 @@ Version 2.2.18 18 June 2021:
    Introduce support for request payloads that exceed the maximum string length of the target DB Server.
 	   This enhancement requires DB Superserver version 4.3; Revision 22 (or later).
 
+Version 2.2.19 23 June 2021:
+   Mark all DB Servers for a path as being 'online' after a request fails on account of all servers being being marked 'offline'.
+      This will allow subsequent requests to succeed if, in the meantime, a participating DB Server becomes available.
+
 */
 
 
@@ -1640,6 +1644,7 @@ int mg_obtain_connection(MGWEB *pweb)
       if (pweb->server_no == -1) { /* no online servers in list */
          pweb->server_no = 0;
          pweb->psrv = ppath->servers[pweb->server_no].psrv;
+         mg_server_online(pweb, NULL, 0); /* v2.2.19 */
          mg_leave_critical_section((void *) &mg_global_mutex);
          strcpy(pweb->error, "All available DB Servers are currently offline");
          return CACHE_FAILURE;
@@ -1846,6 +1851,50 @@ int mg_server_offline(MGWEB *pweb, MGSRV *psrv, int context)
       }
       pcon = pcon->pnext;
    }
+
+   return 0;
+}
+
+
+/* v2.2.19 */
+int mg_server_online(MGWEB *pweb, MGSRV *psrv, int context)
+{
+   int server_no;
+
+   if (psrv) { /* just mark one server as online */
+      if (context) {
+         /* block new connections to this server */
+         mg_enter_critical_section((void *) &mg_global_mutex);
+      }
+      psrv->offline = 0;
+      if (context) {
+         mg_leave_critical_section((void *) &mg_global_mutex);
+      }
+      return 0;
+   }
+
+   if (!pweb->ppath) {
+      return -1;
+   }
+   if (!pweb->ppath->servers[1].psrv) { /* only one server, therefore no server list for failover */
+      return -1;
+   }
+
+   if (context) {
+      /* block new connections to this server */
+      mg_enter_critical_section((void *) &mg_global_mutex);
+   }
+   for (server_no = 0; pweb->ppath->servers[server_no].psrv; server_no ++) {
+      pweb->ppath->servers[server_no].psrv->offline = 0;
+   }
+   pweb->ppath->server_no = 0;
+   if (context) {
+      mg_leave_critical_section((void *) &mg_global_mutex);
+   }
+
+/*
+   mg_log_event(pweb->plog, pweb, "Mark all servers for this path as 'online' following an 'All DB Servers offline' event", "mg_server_online", 0);
+*/
 
    return 0;
 }
