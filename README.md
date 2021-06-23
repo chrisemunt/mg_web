@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-18 June 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+23 June 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.2; Revision 18.
+* Current Release: Version: 2.2; Revision 19.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -211,3 +211,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Introduce support for request payloads that exceed the maximum string length of the target DB Server.
 	* This enhancement requires DB Superserver version 4.3; Revision 22 (or later).
 
+### v2.2.19 (23 June 2021)
+
+* Mark all DB Servers for a path as being 'online' after a request fails on account of all servers being being marked 'offline'.  This will allow subsequent requests to succeed if, in the meantime, a participating DB Server becomes available.
