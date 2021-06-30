@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-23 June 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+30 June 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.2; Revision 19.
+* Current Release: Version: 2.2; Revision 20.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -214,3 +214,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.2.19 (23 June 2021)
 
 * Mark all DB Servers for a path as being 'online' after a request fails on account of all servers being being marked 'offline'.  This will allow subsequent requests to succeed if, in the meantime, a participating DB Server becomes available.
+
+### v2.2.20 (30 June 2021)
+
+* Introduce a configuration parameter (**health\_check**) to instruct **mg\_web** to retry connecting to DB Servers marked as 'offline' after the specified period of time.
+	* Example: **health_check 600** - with this setting the DB Server will, if marked 'offline', be retried after 600 seconds (i.e. after 10 minutes have elapsed since marking the DB Server 'offline').
