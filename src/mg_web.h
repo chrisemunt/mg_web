@@ -1041,6 +1041,8 @@ typedef struct tagDBXGTMSO {
 typedef struct tagMGSRV {
    short             dbtype;
    short             offline;
+   time_t            time_offline; /* v2.2.20 */
+   int               health_check;  /* v2.2.20 */
    char              *name;
    char              lcname[64]; /* v2.1.17 */
    int               name_len;

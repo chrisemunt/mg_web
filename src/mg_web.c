@@ -107,6 +107,10 @@ Version 2.2.19 23 June 2021:
    Mark all DB Servers for a path as being 'online' after a request fails on account of all servers being being marked 'offline'.
       This will allow subsequent requests to succeed if, in the meantime, a participating DB Server becomes available.
 
+Version 2.2.20 30 June 2021:
+   Introduce a configuration parameter (health_check) to instruct mg_web to retry connecting to DB Servers marked as 'offline' after the specified period of time.
+      Example: health_check 600 - retry server after 10 minutes.
+
 */
 
 
@@ -1781,7 +1785,15 @@ int mg_obtain_connection(MGWEB *pweb)
 
    rc = mg_connect(pweb, 0);
 
-   if (rc != CACHE_SUCCESS) {
+   if (rc == CACHE_SUCCESS) {
+      if (pcon->psrv->offline == 2) { /* v2.2.20 */
+         char buffer[256];
+         sprintf(buffer, "Previously offline DB Server %s has passed its health check; marking as online", pweb->psrv ? pweb->psrv->name : "null");
+         mg_log_event(pweb->plog, pweb, buffer, "mg_web: information", 0);
+         mg_server_online(pweb, pcon->psrv, 0);
+      }
+   }
+   else {
       pcon->alloc = 0;
       pcon->inuse = 0;
       pweb->pcon = NULL;
@@ -1794,7 +1806,9 @@ int mg_obtain_connection(MGWEB *pweb)
 int mg_obtain_server(MGWEB *pweb, int context)
 {
    int server_no, server_no_start;
+   time_t time_now;
 
+   time_now = time(NULL);
    server_no_start = pweb->ppath->server_no;
    server_no = -1;
    while (server_no == -1) {
@@ -1803,14 +1817,34 @@ int mg_obtain_server(MGWEB *pweb, int context)
 /*
       {
          char buffer[256];
-         sprintf(buffer, "pweb->ppath->server_no=%d; pweb->ppath->servers[pweb->ppath->server_no].psrv->offline=%d;  pweb->ppath->servers[pweb->ppath->server_no].exclusive=%d;", pweb->ppath->server_no, pweb->ppath->servers[pweb->ppath->server_no].psrv->offline, pweb->ppath->servers[pweb->ppath->server_no].exclusive);
+         sprintf(buffer, "pweb->ppath->server_no=%d; psrv->offline=%d; psrv->health_check=%d; exclusive=%d; time_offline=%d", pweb->ppath->server_no, pweb->ppath->servers[pweb->ppath->server_no].psrv->offline, pweb->ppath->servers[pweb->ppath->server_no].psrv->health_check, pweb->ppath->servers[pweb->ppath->server_no].exclusive, pweb->ppath->servers[pweb->ppath->server_no].psrv->offline ? (int) difftime(time_now, pweb->ppath->servers[pweb->ppath->server_no].psrv->time_offline) : 0);
          mg_log_event(pweb->plog, pweb, buffer, "mg_obtain_server", 0);
       }
 */
+      /* v2.2.20 */
+      if (pweb->ppath->servers[pweb->ppath->server_no].exclusive == 0) {
+         if (pweb->ppath->servers[pweb->ppath->server_no].psrv->offline == 1 && pweb->ppath->servers[pweb->ppath->server_no].psrv->health_check > 0 && difftime(time_now, pweb->ppath->servers[pweb->ppath->server_no].psrv->time_offline) > pweb->ppath->servers[pweb->ppath->server_no].psrv->health_check) {
+/*
+            {
+               char buffer[256];
+               sprintf(buffer, "pweb->ppath->server_no=%d; psrv->health_check=%d; time_offline=%d;", pweb->ppath->server_no, pweb->ppath->servers[pweb->ppath->server_no].psrv->health_check, (int) difftime(time_now, pweb->ppath->servers[pweb->ppath->server_no].psrv->time_offline));
+               mg_log_event(pweb->plog, pweb, buffer, "mg_obtain_server: retry this offline server as health_check time is up", 0);
+            }
+*/
+            pweb->ppath->servers[pweb->ppath->server_no].psrv->time_offline = time(NULL); /* push time offline forward so only this request tries */
+            pweb->ppath->servers[pweb->ppath->server_no].psrv->offline = 2; /* indicate that we're retrying this offline server */
+            server_no = pweb->ppath->server_no;
+         }
+         else if (pweb->ppath->servers[pweb->ppath->server_no].psrv->offline == 0) { /* server online so we can use it */
+            server_no = pweb->ppath->server_no;
+         }
+      }
+/*
       if (pweb->ppath->servers[pweb->ppath->server_no].psrv->offline == 0 && pweb->ppath->servers[pweb->ppath->server_no].exclusive == 0) {
          server_no = pweb->ppath->server_no;
       }
-      if (pweb->ppath->load_balancing || pweb->ppath->servers[pweb->ppath->server_no].psrv->offline == 1) { /* increment core server number if one is offline or load balancing is on */
+*/
+      if (pweb->ppath->load_balancing || pweb->ppath->servers[pweb->ppath->server_no].psrv->offline > 0) { /* increment core server number if one is offline or load balancing is on */
          pweb->ppath->server_no ++;
          if (!pweb->ppath->servers[pweb->ppath->server_no].psrv) {
             pweb->ppath->server_no = 0;
@@ -1839,6 +1873,7 @@ int mg_server_offline(MGWEB *pweb, MGSRV *psrv, int context)
    mg_enter_critical_section((void *) &mg_global_mutex);
 
    psrv->offline = 1;
+   psrv->time_offline = time(NULL); /* v2.2.20 */
 
    mg_leave_critical_section((void *) &mg_global_mutex);
 
@@ -2795,6 +2830,9 @@ __try {
                   }
                   memset((void *) psrv, 0, sizeof(MGSRV));
                   psrv->offline = 0;
+                  /* v2.2.20 */
+                  psrv->time_offline = 0;
+                  psrv->health_check = 0;
                   if (psrv_prev) {
                      psrv_prev->pnext = psrv;
                   }
@@ -2905,6 +2943,9 @@ __try {
                   }
                   else if (!strcmp(word[0], "output_device")) {
                      psrv->output_device = word[1];
+                  }
+                  else if (!strcmp(word[0], "health_check")) { /* v2.2.20 */
+                     psrv->health_check = (int) strtol(word[1], NULL, 10);
                   }
                   else {
                      sprintf(mg_system.config_error, "Invalid 'server' parameter '%s' on line %d", word[0], ln); 
