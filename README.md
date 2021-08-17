@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-30 June 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+18 August 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.2; Revision 20.
+* Current Release: Version: 2.3; Revision 21.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -219,3 +219,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 * Introduce a configuration parameter (**health\_check**) to instruct **mg\_web** to retry connecting to DB Servers marked as 'offline' after the specified period of time.
 	* Example: **health_check 600** - with this setting the DB Server will, if marked 'offline', be retried after 600 seconds (i.e. after 10 minutes have elapsed since marking the DB Server 'offline').
+
+### v2.3.21 (18 August 2021)
+
+* Introduce support for TLS-secured connectivity between mg\_web and the DB Superserver.
+	* This enhancement requires DB Superserver version 4.4; Revision 23 (or later).
