@@ -9,6 +9,8 @@
 # Install:
 # nmake -f Makefile.win install
 
+# Headers for OpenSSL
+TLS=/openssl/include
 
 # Microsoft C Compiler
 CC=cl.exe
@@ -20,8 +22,8 @@ LINK=link.exe
 all : app
 
 # Link the object file and dependent libraries into a binary
-app : mg_web_iis.obj mg_websocket.obj mg_web.obj
-   $(LINK) /OUT:mg_web_iis.dll mg_web_iis.obj mg_websocket.obj mg_web.obj /MANIFEST /NXCOMPAT /PDB:"mg_web_iis.pdb" /DYNAMICBASE \
+app : mg_web_iis.obj mg_websocket.obj mg_webstatus.obj mg_webtls.obj mg_web.obj
+   $(LINK) /OUT:mg_web_iis.dll mg_web_iis.obj mg_websocket.obj mg_webstatus.obj mg_webtls.obj mg_web.obj /MANIFEST /NXCOMPAT /PDB:"mg_web_iis.pdb" /DYNAMICBASE \
            "kernel32.lib" "user32.lib" \
            /IMPLIB:"mg_web_iis.lib" /DLL /MACHINE:X64 /INCREMENTAL:NO /SUBSYSTEM:WINDOWS \
            /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /ERRORREPORT:PROMPT /NOLOGO \
@@ -31,17 +33,27 @@ app : mg_web_iis.obj mg_websocket.obj mg_web.obj
 mg_web_iis.obj : mg_web_iis.cpp
    $(CC) /Fomg_web_iis.obj /GS /W3 /Gy /Zc:wchar_t /Zi /Gm- /O2 /Ob1 /fp:precise \
          /D "WIN32" /D "NDEBUG" /D "_WINDOWS" /D "_VC80_UPGRADE=0x0710" /D "_WINDLL" /errorReport:prompt \
-         /GF /WX- /Zc:forScope /Gd /MD /FC /EHsc /c mg_web_iis.cpp
+         /I $(TLS) /GF /WX- /Zc:forScope /Gd /MD /FC /EHsc /c mg_web_iis.cpp
 
 mg_websocket.obj : mg_websocket.c
    $(CC) /Fomg_websocket.obj /GS /W3 /Gy /Zc:wchar_t /Zi /Gm- /O2 /Ob1 /fp:precise \
          /D "WIN32" /D "NDEBUG" /D "_WINDOWS" /D "_VC80_UPGRADE=0x0710" /D "_WINDLL" /errorReport:prompt \
-         /GF /WX- /Zc:forScope /Gd /MD /FC /EHsc /c mg_websocket.c
+         /I $(TLS) /GF /WX- /Zc:forScope /Gd /MD /FC /EHsc /c mg_websocket.c
+
+mg_webstatus.obj : mg_webstatus.c
+   $(CC) /Fomg_webstatus.obj /GS /W3 /Gy /Zc:wchar_t /Zi /Gm- /O2 /Ob1 /fp:precise \
+         /D "WIN32" /D "NDEBUG" /D "_WINDOWS" /D "_VC80_UPGRADE=0x0710" /D "_WINDLL" /errorReport:prompt \
+         /I $(TLS) /GF /WX- /Zc:forScope /Gd /MD /FC /EHsc /c mg_webstatus.c
+
+mg_webtls.obj : mg_webtls.c
+   $(CC) /Fomg_webtls.obj /GS /W3 /Gy /Zc:wchar_t /Zi /Gm- /O2 /Ob1 /fp:precise \
+         /D "WIN32" /D "NDEBUG" /D "_WINDOWS" /D "_VC80_UPGRADE=0x0710" /D "_WINDLL" /errorReport:prompt \
+         /I $(TLS) /GF /WX- /Zc:forScope /Gd /MD /FC /EHsc /c mg_webtls.c
 
 mg_web.obj : mg_web.c
    $(CC) /Fomg_web.obj /GS /W3 /Gy /Zc:wchar_t /Zi /Gm- /O2 /Ob1 /fp:precise \
          /D "WIN32" /D "NDEBUG" /D "_WINDOWS" /D "_VC80_UPGRADE=0x0710" /D "_WINDLL" /errorReport:prompt \
-         /GF /WX- /Zc:forScope /Gd /MD /FC /EHsc /c mg_web.c
+         /I $(TLS) /GF /WX- /Zc:forScope /Gd /MD /FC /EHsc /c mg_web.c
 
 # Install mg_web_iis module
 install :
@@ -49,5 +61,5 @@ install :
 
 # Clean target
 clean :
-   del mg_web_iis.dll mg_web_iis.dll.manifest mg_web_iis.obj mg_websocket.obj mg_web.obj mg_web_iis.pdb mg_web_iis.lib mg_web_iis.exp vc*.pdb
+   del mg_web_iis.dll mg_web_iis.dll.manifest mg_web_iis.obj mg_websocket.obj mg_webstatus.obj mg_webtls.obj mg_web.obj mg_web_iis.pdb mg_web_iis.lib mg_web_iis.exp vc*.pdb
 
