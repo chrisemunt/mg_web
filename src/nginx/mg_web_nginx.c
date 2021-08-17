@@ -43,6 +43,9 @@
 
 #include "mg_web.c"
 #include "mg_websocket.c"
+#include "mg_webstatus.c"
+#include "mg_webtls.c"
+
 
 #define MG_MAGIC_TYPE1        "application/x-mgweb"
 #define MG_MAGIC_TYPE2        "text/mgweb"
