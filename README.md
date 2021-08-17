@@ -223,4 +223,5 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.3.21 (18 August 2021)
 
 * Introduce support for TLS-secured connectivity between mg\_web and the DB Superserver.
+	* This enhancement is available for InterSystems DB Servers only.
 	* This enhancement requires DB Superserver version 4.4; Revision 23 (or later).
