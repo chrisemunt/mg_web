@@ -820,9 +820,11 @@ typedef struct tagDBXLOG {
    char log_level[8];
    char log_filter[64];
    short log_errors;
+   short log_verbose;
    short log_frames;
    short log_transmissions;
    short log_transmissions_to_webserver;
+   short log_tls;
    unsigned long req_no;
    unsigned long fun_no;
    char product[4];
@@ -1038,6 +1040,23 @@ typedef struct tagDBXGTMSO {
 } DBXGTMSO, *PDBXGTMSO;
 
 
+/* v2.3.21 */
+typedef struct tagMGTLS {
+   char              *name;
+   char              *libpath;
+   char              *cert_file;
+   char              *key_file;
+   char              *password;
+   char              *ca_file;
+   char              *ca_path;
+   char              *cipher_list;
+   char              *protocols[8];
+   int               verify_peer;
+   int               key_type;
+   struct tagMGTLS   *pnext;
+} MGTLS, *LPMGTLS;
+
+
 typedef struct tagMGSRV {
    short             dbtype;
    short             offline;
@@ -1060,6 +1079,8 @@ typedef struct tagMGSRV {
    char              *dbtype_name;
    MGBUF             *penv;
    int               net_connection;
+   char              *tls_name; /* v2.3.21 */
+   MGTLS             *ptls;
    struct tagMGSRV   *pnext;
 } MGSRV, *LPMGSRV;
 
@@ -1109,12 +1130,14 @@ typedef struct tagDBXCON {
    int               net_connection;
    int               closed;
    int               timeout;
+   int               current_timeout;
    int               eof;
    SOCKET            cli_socket;
    int               int_pipe[2];
    int               stream_tail_len;
    unsigned char     stream_tail[8];
    MGSRV             *psrv;
+   void              *ptlscon;
    struct tagDBXCON  *pnext;
 } DBXCON, *PDBXCON;
 

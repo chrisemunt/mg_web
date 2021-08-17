@@ -1,8 +1,7 @@
 /*
    ----------------------------------------------------------------------------
-   | mg_dba.so|dll                                                            |
-   | Description: An abstraction of the InterSystems Cache/IRIS API           |
-   |              and YottaDB API                                             |
+   | mg_web.so|dll                                                            |
+   | Description: HTTP Gateway for InterSystems Cache/IRIS and YottaDB        |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
    | Copyright (c) 2019-2021 M/Gateway Developments Ltd,                      |
@@ -26,32 +25,8 @@
    ----------------------------------------------------------------------------
 */
 
-#ifndef MG_WEBSYS_H
-#define MG_WEBSYS_H
 
-/* Set this symbol to 1 to include TLS functionality */
-#define DBX_WITH_TLS             1
-
-#define MAJORVERSION             2
-#define MINORVERSION             3
-#define MAINTVERSION             21
-#define BUILDNUMBER              0
-
-#define DBX_VERSION_MAJOR        "2"
-#define DBX_VERSION_MINOR        "3"
-#define DBX_VERSION_BUILD        "21"
-
-#define DBX_VERSION              DBX_VERSION_MAJOR "." DBX_VERSION_MINOR "." DBX_VERSION_BUILD
-#define DBX_COMPANYNAME          "M/Gateway Developments Ltd\0"
-#define DBX_FILEDESCRIPTION      "HTTP Gateway for InterSystems IRIS/Cache and YottaDB\0"
-#define DBX_FILEVERSION          DBX_VERSION
-#define DBX_INTERNALNAME         "mg_web_iis\0"
-#define DBX_LEGALCOPYRIGHT       "Copyright 2017-2021, M/Gateway Developments Ltd\0"
-#define DBX_ORIGINALFILENAME     "mg_web_iis\0"
-#define DBX_PLATFORM             PROCESSOR_ARCHITECTURE
-#define DBX_PRODUCTNAME          "mg_web_iis\0"
-#define DBX_PRODUCTVERSION       DBX_VERSION
-#define DBX_BUILD                DBX_VERSION
-
-#endif
+#include "mg_websys.h"
+#include "mg_web.h"
+#include "mg_webstatus.h"
 

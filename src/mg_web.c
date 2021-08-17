@@ -111,24 +111,30 @@ Version 2.2.20 30 June 2021:
    Introduce a configuration parameter (health_check) to instruct mg_web to retry connecting to DB Servers marked as 'offline' after the specified period of time.
       Example: health_check 600 - retry server after 10 minutes.
 
+Version 2.3.21 18 August 2021:
+   Introduce support for TLS-secured connectivity between mg_web and InterSystems DB Servers.
+
 */
 
 
 #include "mg_websys.h"
 #include "mg_web.h"
 #include "mg_websocket.h"
+#include "mg_webstatus.h"
+#include "mg_webtls.h"
 
 
 #if !defined(_WIN32)
 extern int errno;
 #endif
 
-MGSYS                mg_system         = {0, 0, 0, 0, 0, 0, "", "", "", "", NULL, NULL, NULL, NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, "", ""}};
+MGSYS                mg_system         = {0, 0, 0, 0, 0, 0, "", "", "", "", NULL, NULL, NULL, NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, 0, 0, "", ""}};
 static NETXSOCK      netx_so           = {0, 0, 0, 0, 0, 0, 0, {'\0'}};
 static DBXCON *      mg_connection     = NULL;
 
 static MGSRV *       mg_server         = NULL;
 static MGPATH *      mg_path           = NULL;
+static MGTLS *       mg_tls            = NULL; /* v2.3.21 */
 
 MG_MALLOC            mg_ext_malloc     = NULL;
 MG_REALLOC           mg_ext_realloc    = NULL;
@@ -489,6 +495,7 @@ mg_web_process_failover:
 */
 
    rc = mg_web_execute(pweb);
+
 /*
    {
       char bufferx[1024];
@@ -500,7 +507,7 @@ mg_web_process_failover:
    get = 0;
    if (rc == CACHE_SUCCESS) {
       pweb->response_headers = pweb->output_val.svalue.buf_addr + 10;
-      p = (unsigned char *) strstr(pweb->response_headers, "\r\n\r\n");
+      p = (unsigned char *) strstr(pweb->response_headers, "\x0d\x0a\x0d\x0a");
       if (p) {
          *p = '\0';
          pweb->response_content = (char *) (p + 4);
@@ -508,6 +515,13 @@ mg_web_process_failover:
 
          pweb->response_clen = (pweb->response_size - (pweb->response_headers_len + 5)); /* 5 Byte offset (rno) */
          get = (pweb->output_val.svalue.len_used - (pweb->response_headers_len + 10)); /* 10 Byte offset (blen + rno) */
+/*
+         {
+            char bufferx[1024];
+            sprintf(bufferx, "len_used=%d; headers_len=%d; content-length=%d; response_size=%d; get=%d;", pweb->output_val.svalue.len_used, pweb->response_headers_len, pweb->response_clen, pweb->response_size, get);
+            mg_log_event(pweb->plog, pweb, (char *) bufferx, "Diagnostic", 0);
+         }
+*/
       }
       else {
          pweb->response_content = (char *) (pweb->output_val.svalue.buf_addr + 10);
@@ -1732,6 +1746,7 @@ int mg_obtain_connection(MGWEB *pweb)
    pcon->net_connection = 0;
    pcon->closed = 0;
    pcon->timeout = psrv->timeout;
+   pcon->current_timeout = 0;
 
 /*
    {
@@ -2717,12 +2732,13 @@ int mg_worker_exit()
 
 int mg_parse_config()
 {
-   int wn, vn, ln, n, len, lenx, line_len, size, inserver, inpath, incgi, inenv, eos, ex;
+   int wn, vn, ln, n, len, lenx, line_len, size, inserver, inpath, intls, incgi, inenv, eos, ex;
    char *pa, *pz, *peol, *p, *pprop;
    char *word[256];
    char line[1024], buffer[256];
    MGSRV *psrv, *psrv_prev;
    MGPATH *ppath, *ppath_prev;
+   MGTLS *ptls, *ptls_prev;
 
 #ifdef _WIN32
 __try {
@@ -2732,8 +2748,11 @@ __try {
    psrv_prev = NULL;
    ppath = NULL;
    ppath_prev = NULL;
+   ptls = NULL;
+   ptls_prev = NULL;
    inserver = 0;
    inpath = 0;
+   intls = 0;
    incgi = 0;
    inenv = 0;
    line_len = 0;
@@ -2833,6 +2852,7 @@ __try {
                   /* v2.2.20 */
                   psrv->time_offline = 0;
                   psrv->health_check = 0;
+                  psrv->ptls = NULL; /* v2.3.21 */
                   if (psrv_prev) {
                      psrv_prev->pnext = psrv;
                   }
@@ -2887,6 +2907,43 @@ __try {
                   ppath->name = word[1];
                   ppath->name_len = (int) strlen(ppath->name);
                   mg_lcase(ppath->name);
+               }
+            }
+            else if (strstr(word[0], "tls")) { /* v2.3.21 */
+               intls = eos ? 0 : 1;
+               if (!eos && word[1]) {
+                  len = (int) strlen(word[1]);
+                  if (word[1][len - 1] == '>') {
+                     len --;
+                     word[1][len] = '\0';
+                  }
+                  ptls = (MGTLS *) mg_malloc(NULL, sizeof(MGTLS), 0);
+                  if (!ptls) {
+                     strcpy(mg_system.config_error, "Memory allocation error (MGTLS)");
+                     break;
+                  }
+                  memset((void *) ptls, 0, sizeof(MGTLS));
+                  for (n = 0; n < 8; n ++) {
+                     ptls->protocols[n] = NULL;
+                  }
+                  ptls->verify_peer = 0;
+                  ptls->key_type = 0;
+                  ptls->name = NULL;
+                  ptls->cert_file = NULL;
+                  ptls->key_file = NULL;
+                  ptls->password = NULL;
+                  ptls->ca_file = NULL;
+                  ptls->ca_path = NULL;
+                  ptls->cipher_list = NULL;
+                  if (ptls_prev) {
+                     ptls_prev->pnext = ptls;
+                  }
+                  else {
+                     mg_tls = ptls;
+                  }
+                  ptls_prev = ptls;
+                  ptls->name = word[1];
+                  mg_lcase(ptls->name);
                }
             }
             else if (strstr(word[0], "cgi")) {
@@ -2946,6 +3003,9 @@ __try {
                   }
                   else if (!strcmp(word[0], "health_check")) { /* v2.2.20 */
                      psrv->health_check = (int) strtol(word[1], NULL, 10);
+                  }
+                  else if (!strcmp(word[0], "tls")) { /* v2.3.21 */
+                     psrv->tls_name = word[1];
                   }
                   else {
                      sprintf(mg_system.config_error, "Invalid 'server' parameter '%s' on line %d", word[0], ln); 
@@ -3044,6 +3104,80 @@ __try {
                   }
                }
             }
+            else if (intls) { /* v2.3.21 */
+               if (wn > 1) {
+                  mg_lcase(word[0]);
+                  if (!strcmp(word[0], "path")) {
+                     ptls->libpath = word[1];
+                  }
+                  else if (!strcmp(word[0], "certificate_file")) {
+                     ptls->cert_file = word[1];
+                  }
+                  else if (!strcmp(word[0], "key_file")) {
+                     ptls->key_file = word[1];
+                  }
+                  else if (!strcmp(word[0], "password")) {
+                     ptls->password = word[1];
+                  }
+                  else if (!strcmp(word[0], "ca_certificate_file")) {
+                     ptls->ca_file = word[1];
+                  }
+                  else if (!strcmp(word[0], "ca_certificate_path")) {
+                     ptls->ca_path = word[1];
+                  }
+                  else if (!strcmp(word[0], "cipher_list")) {
+                     ptls->cipher_list = word[1];
+                  }
+                  else if (!strcmp(word[0], "protocols")) {
+                     for (n = 1; n < 8; n ++) {
+                        if (!word[n]) {
+                           break;
+                        }
+                        mg_lcase(word[n]);
+                        if (!strncmp(word[n], "sslv", 4) || !strncmp(word[n], "tlsv", 4)) {
+                           double vers;
+                           vers = strtod(word[n] + 4, NULL);
+                           if (vers == 0) {
+                              sprintf(mg_system.config_error, "Invalid value (%s) for'tls' parameter 'protocols' on line %d", word[n], ln);
+                              break;
+                           }
+                        }
+                        else {
+                           sprintf(mg_system.config_error, "Invalid value (%s) for'tls' parameter 'protocols' on line %d", word[n], ln);
+                           break;
+                        }
+                        ptls->protocols[n] = word[n];
+                     }
+                     if (mg_system.config_error[0]) {
+                        break;
+                     }
+                  }
+                  else if (!strcmp(word[0], "key_type")) {
+                     mg_lcase(word[1]);
+                     if (!strcmp(word[1], "rsa"))
+                        ptls->key_type = 0;
+                     else if (!strcmp(word[1], "dsa"))
+                        ptls->key_type = 1;
+                     else
+                        sprintf(mg_system.config_error, "Invalid value (%s) for'tls' parameter 'key_type' on line %d", word[1], ln); 
+                  }
+                  else if (!strcmp(word[0], "verify_peer")) {
+                     mg_lcase(word[1]);
+                     if (!strcmp(word[1], "on") || !strcmp(word[1], "yes") || !strcmp(word[1], "1"))
+                        ptls->verify_peer = 1;
+                     else if (!strcmp(word[1], "off") || !strcmp(word[1], "no") || !strcmp(word[1], "0"))
+                        ptls->verify_peer = 0;
+                     else
+                        sprintf(mg_system.config_error, "Invalid value (%s) for'tls' parameter 'verify_peer' on line %d", word[1], ln); 
+                  }
+                  else {
+                     sprintf(mg_system.config_error, "Invalid 'tls' parameter '%s' on line %d", word[0], ln); 
+                  }
+               }
+               else {
+                  sprintf(mg_system.config_error, "Invalid 'tls' directive '%s' on line %d", word[0], ln); 
+               }
+            }
             else if (incgi) {
                for (n = 0; n < wn; n ++) {
                   if (mg_system.cgi_max < 120) {
@@ -3062,15 +3196,20 @@ __try {
                   }
                   else if (!strcmp(word[0], "log_level")) {
                      for (n = 1; n < wn; n ++) {
-                        mg_lcase(word[n]);
-                        if (strstr(word[n], "e"))
+                        if (strstr(word[n], "e") || strstr(word[n], "E"))
                            mg_system.log.log_errors = 1;
-                        if (strstr(word[n], "f"))
+                        if (strstr(word[n], "v") || strstr(word[n], "V"))
+                           mg_system.log.log_verbose = 1;
+                        if (strstr(word[n], "f") || strstr(word[n], "F"))
                            mg_system.log.log_frames = 1;
-                        if (strstr(word[n], "t"))
+                        if (strstr(word[n], "t") || strstr(word[n], "T"))
                            mg_system.log.log_transmissions = 1;
-                        if (strstr(word[n], "w"))
+                        if (strstr(word[n], "w") || strstr(word[n], "W"))
                            mg_system.log.log_transmissions_to_webserver = 1;
+                        if (strstr(word[n], "s")) /* v2.3.21 */
+                           mg_system.log.log_tls = 1;
+                        if (strstr(word[n], "S"))
+                           mg_system.log.log_tls = 2;
                      }
                   }
                   else if (!strcmp(word[0], "chunking")) { /* 2.0.8 */
@@ -3162,6 +3301,7 @@ int mg_verify_config()
    char buffer[256];
    MGSRV *psrv;
    MGPATH *ppath;
+   MGTLS *ptls;
 
 #ifdef _WIN32
 __try {
@@ -3238,12 +3378,32 @@ __try {
             break;
          }
       }
+      if (psrv->tls_name) { /* v2.3.21 */
+         ptls = mg_tls;
+         while (ptls) {
+            if (!strcmp(ptls->name, psrv->tls_name)) {
+               break;
+            }
+            ptls = ptls->pnext;
+         }
+         if (!ptls) {
+            sprintf(mg_system.config_error, "Cannot find the tls configuration named '%s' for DB Server'%s'", psrv->tls_name, psrv->name);
+            break;
+         }
+#if DBX_WITH_TLS >= 1
+         psrv->ptls = ptls;
+#else
+         psrv->ptls = NULL;
+         sprintf(mg_system.config_error, "This mg_web installation does not contain TLS functionality (DB Server'%s')", psrv->name);
+#endif
+      }
+
       if (psrv->penv) {
          mg_buf_cat(psrv->penv, "\n", 1);
       }
 
       if (pbuf) {
-         sprintf(pbuf, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null");
+         sprintf(pbuf, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s; tls=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null", psrv->tls_name ? psrv->tls_name : "null");
          mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: DB Server", 0);
          if (psrv->penv) {
             sprintf(pbuf, "mg_web: configuration: DB Server: environment variables for DB Server name=%s;", psrv->name);
@@ -5364,9 +5524,11 @@ int mg_ccase(char *string)
 int mg_log_init(DBXLOG *p_log)
 {
    p_log->log_errors = 0;
+   p_log->log_verbose = 0;
    p_log->log_frames = 0;
    p_log->log_transmissions = 0;
    p_log->log_transmissions_to_webserver = 0;
+   p_log->log_tls = 0;
    p_log->log_file[0] = '\0';
    p_log->log_level[0] = '\0';
    p_log->log_filter[0] = '\0';
@@ -6267,7 +6429,7 @@ netx_load_winsock_no_so:
 int netx_tcp_connect(MGWEB *pweb, int context)
 {
    short physical_ip, ipv6, connected, getaddrinfo_ok;
-   int n, errorno;
+   int rc, n, errorno;
    unsigned long inetaddr;
    DWORD spin_count;
    struct sockaddr_in srv_addr, cli_addr;
@@ -6308,6 +6470,18 @@ int netx_tcp_connect(MGWEB *pweb, int context)
    }
 
 #endif /* #if defined(_WIN32) */
+
+   if (pweb->psrv->ptls) {
+      pweb->error[0] = '\0';
+      rc = mgtls_crypt_load_library(pweb);
+      if (rc != CACHE_SUCCESS) {
+         return rc;
+      }
+      rc = mgtls_tls_load_library(pweb);
+      if (rc != CACHE_SUCCESS) {
+         return rc;
+      }
+   }
 
 #if defined(NETX_IPV6)
 
@@ -6421,7 +6595,14 @@ int netx_tcp_connect(MGWEB *pweb, int context)
       if (connected) {
          pcon->net_connection = 1;
          pcon->closed = 0;
-         return 0;
+         if (pweb->psrv->ptls) {
+            n = mgtls_open_session(pweb);
+            if (n != CACHE_SUCCESS) {
+               netx_tcp_disconnect(pweb, 0);
+               return -5;
+            }
+         }
+         return CACHE_SUCCESS;
       }
       else {
          if (getaddrinfo_ok) {
@@ -6655,7 +6836,7 @@ int netx_tcp_connect(MGWEB *pweb, int context)
    pcon->net_connection = 1;
    pcon->closed = 0;
 
-   return 0;
+   return CACHE_SUCCESS;
 }
 
 
@@ -6671,11 +6852,19 @@ int netx_tcp_handshake(MGWEB *pweb, int context)
    len = (int) strlen(buffer);
 
    netx_tcp_write(pweb, (unsigned char *) buffer, len);
+
    len = netx_tcp_read(pweb, (unsigned char *) buffer, 5, 10, 1); /* v2.1.13 */
 
    len = mg_get_size((unsigned char *) buffer);
-
+/*
+   {
+      char bufferx[256];
+      sprintf(bufferx, "netx_tcp_handshake: len=%d", len);
+      mg_log_event(pweb->plog, pweb, bufferx, "netx_tcp_handshake", -1);
+   }
+*/
    netx_tcp_read(pweb, (unsigned char *) buffer, len, 10, 1); /* v2.1.13 */
+
    if (pcon->psrv->dbtype != DBX_DBTYPE_YOTTADB) {
       isc_parse_zv(buffer, pcon->p_zv);
    }
@@ -7227,6 +7416,10 @@ int netx_tcp_disconnect(MGWEB *pweb, int context)
 
    if (pcon->cli_socket != (SOCKET) 0) {
 
+      if (pweb->psrv->ptls && pcon->ptlscon) {
+         mgtls_close_session(pweb);
+      }
+
 #if defined(_WIN32)
       NETX_CLOSESOCKET(pcon->cli_socket);
 /*
@@ -7261,7 +7454,12 @@ int netx_tcp_write(MGWEB *pweb, unsigned char *data, int size)
    rc = 0;
    total = 0;
    for (;;) {
-      n = NETX_SEND(pcon->cli_socket, (xLPSENDBUF) (data + total), size - total, 0);
+      if (pcon->ptlscon) {
+         n = mgtls_send(pweb, (unsigned char *) (data + total), size - total);
+      }
+      else {
+         n = NETX_SEND(pcon->cli_socket, (xLPSENDBUF) (data + total), size - total, 0);
+      }
 
       if (SOCK_ERROR(n)) {
          errorno = (int) netx_get_last_error(0);
@@ -7314,49 +7512,59 @@ int netx_tcp_read(MGWEB *pweb, unsigned char *data, int size, int timeout, int c
    for (;;) {
       spin_count ++;
 
-      FD_ZERO(&rset);
-      FD_ZERO(&eset);
-      FD_SET(pcon->cli_socket, &rset);
-      FD_SET(pcon->cli_socket, &eset);
+      if (pcon->ptlscon) {
+         if (timeout != pcon->current_timeout) {
+            NETX_SETSOCKOPT(pcon->cli_socket, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tval, sizeof(tval));
+            pcon->current_timeout = timeout;
+         }
+
+         n = mgtls_recv(pweb, (unsigned char *) (data + len), size - len);
+      }
+      else {
+         FD_ZERO(&rset);
+         FD_ZERO(&eset);
+         FD_SET(pcon->cli_socket, &rset);
+         FD_SET(pcon->cli_socket, &eset);
 
 #if defined(_WIN32)
-      max_fd = (int) (pcon->cli_socket + 1);
-      n = NETX_SELECT((int) max_fd, &rset, NULL, &eset, &tval);
+         max_fd = (int) (pcon->cli_socket + 1);
+         n = NETX_SELECT((int) max_fd, &rset, NULL, &eset, &tval);
 #else
-      if (pcon->int_pipe[0] > 0) {
-         FD_SET(pcon->int_pipe[0], &rset);
-      }
-      max_fd = ((int) pcon->cli_socket) > pcon->int_pipe[0] ? ((int) pcon->cli_socket) : pcon->int_pipe[0];
-      n = NETX_SELECT(max_fd + 1, &rset, NULL, &eset, &tval);
-      if (n > 0 && pcon->int_pipe[0] > 0 && NETX_FD_ISSET(pcon->int_pipe[0], &rset)) {
-         n = read(pcon->int_pipe[0], data, 4);
-         if (!strncmp((char *) data, (char *) "exit", 4)) {
-            data[0] = '\0';
+         if (pcon->int_pipe[0] > 0) {
+            FD_SET(pcon->int_pipe[0], &rset);
+         }
+         max_fd = ((int) pcon->cli_socket) > pcon->int_pipe[0] ? ((int) pcon->cli_socket) : pcon->int_pipe[0];
+         n = NETX_SELECT(max_fd + 1, &rset, NULL, &eset, &tval);
+         if (n > 0 && pcon->int_pipe[0] > 0 && NETX_FD_ISSET(pcon->int_pipe[0], &rset)) {
+            n = read(pcon->int_pipe[0], data, 4);
+            if (!strncmp((char *) data, (char *) "exit", 4)) {
+               data[0] = '\0';
+               result = NETX_READ_ERROR;
+               break;
+            }
+         }
+#endif
+
+         if (n == 0) {
+            sprintf(pweb->error, "TCP Read Error: DB Server did not respond within the timeout period (%d seconds)", timeout);
+            result = NETX_READ_TIMEOUT;
+            break;
+         }
+
+         if (n < 0 || !NETX_FD_ISSET(pcon->cli_socket, &rset)) {
+            int errorno;
+            char message[256];
+
+            errorno = (int) netx_get_last_error(0);
+            netx_get_error_message(errorno, message, 250, 0);
+            sprintf(pweb->error, "TCP Read Error (on select): DB Server closed the connection unexpectedly: Error Code: %d (%s)", errorno, message);
+
             result = NETX_READ_ERROR;
             break;
          }
+
+         n = NETX_RECV(pcon->cli_socket, (char *) data + len, size - len, 0);
       }
-#endif
-
-      if (n == 0) {
-         sprintf(pweb->error, "TCP Read Error: DB Server did not respond within the timeout period (%d seconds)", timeout);
-         result = NETX_READ_TIMEOUT;
-         break;
-      }
-
-      if (n < 0 || !NETX_FD_ISSET(pcon->cli_socket, &rset)) {
-         int errorno;
-         char message[256];
-
-         errorno = (int) netx_get_last_error(0);
-         netx_get_error_message(errorno, message, 250, 0);
-         sprintf(pweb->error, "TCP Read Error (on select): DB Server closed the connection unexpectedly: Error Code: %d (%s)", errorno, message);
-
-         result = NETX_READ_ERROR;
-         break;
-      }
-
-      n = NETX_RECV(pcon->cli_socket, (char *) data + len, size - len, 0);
 
       if (n < 1) {
          if (n == 0) {
