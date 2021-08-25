@@ -114,6 +114,12 @@ Version 2.2.20 30 June 2021:
 Version 2.3.21 18 August 2021:
    Introduce support for TLS-secured connectivity between mg_web and InterSystems DB Servers.
 
+Version 2.3.22 25 August 2021:
+   Support the renamed TLS libraries introduced with OpenSSL v1.1.
+	   libeay32.dll was renamed as libcrypto.dll (or libcrypto-1_1-x64.dll under x64 Windows and libcrypto-1_1.dll for x86 Windows).
+      ssleay32.dll was renamed as libssl.dll (or libssl-1_1-x64.dll under x64 Windows and libssl-1_1.dll for x86 Windows).
+   Correct a memory initialization fault that could occasionally lead to connectivity failures between mg_web and the DB Superserver.
+	   Recommend that mg_web is not used with DB Superserver v4.4.23. 
 */
 
 
@@ -835,6 +841,7 @@ __try {
    netbuf = (unsigned char *) (pweb->input_buf.buf_addr - DBX_IBUFFER_OFFSET);
    netbuf_used = (pweb->input_buf.len_used + DBX_IBUFFER_OFFSET);
    mg_add_block_size((unsigned char *) netbuf, 0, netbuf_used,  0, DBX_CMND_FUNCTION);
+   memset(netbuf + 5, 0, DBX_IBUFFER_OFFSET - 5); /* v2.3.22 */
 
    strcpy(params, "dbx");
    strcpy(label, "ifc");
@@ -2116,7 +2123,8 @@ MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen)
    if (!pweb) {
       return NULL;
    }
-   memset((void *) pweb, 0, sizeof(MGWEB));
+
+   memset((void *) pweb, 0, sizeof(MGWEB) + DBX_IBUFFER_OFFSET); /* v2.3.22 */
 
    pweb->input_buf.buf_addr = ((char *) pweb) + sizeof(MGWEB);
    pweb->input_buf.buf_addr += DBX_IBUFFER_OFFSET;

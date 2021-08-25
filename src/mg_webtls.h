@@ -37,16 +37,28 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
+
+/* v2.3.22 - An ordered list of OpenSSL libraries that mg_web will try to load, each name separated by a single white space */
 #if defined(_WIN32)
-#define DBX_CRYPT_DLL            "libeay32.dll"
-#define DBX_TLS_DLL              "ssleay32.dll"
+
+#if defined(_WIN64)
+#define DBX_CRYPT_LIB            "libcrypto-1_1-x64.dll libcrypto.dll libeay32.dll"
+#define DBX_TLS_LIB              "libssl-1_1-x64.dll libssl.dll ssleay32.dll"
 #else
-#define DBX_CRYPT_SO             "libcrypto.so"
-#define DBX_CRYPT_SL             "libcrypto.sl"
-#define DBX_CRYPT_DYLIB          "libcrypto.dylib"
-#define DBX_TLS_SO               "libssl.so"
-#define DBX_TLS_SL               "libssl.sl"
-#define DBX_TLS_DYLIB            "libssl.dylib"
+#define DBX_CRYPT_LIB            "libcrypto-1_1.dll libcrypto.dll libeay32.dll"
+#define DBX_TLS_LIB              "libssl-1_1.dll libssl.dll ssleay32.dll"
+#endif
+
+#else
+
+#if defined(MACOSX)
+#define DBX_CRYPT_LIB            "libcrypto.dylib libcrypto.so"
+#define DBX_TLS_LIB              "libssl.dylib libssl.so"
+#else
+#define DBX_CRYPT_LIB            "libcrypto.so libcrypto.sl"
+#define DBX_TLS_LIB              "libssl.so libssl.sl"
+#endif
+
 #endif
 
 

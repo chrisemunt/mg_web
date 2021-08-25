@@ -155,36 +155,20 @@ __try {
    }
 
 #if defined(SSL_CTRL_OPTIONS)
-   rc = mg_tls_so->p_SSL_CTX_ctrl(ctx, SSL_CTRL_OPTIONS, SSL_OP_NO_SSLv2, NULL);
-   if (pweb->plog->log_tls > 0) {
-      sprintf(message_buffer, "%d = SSL_CTX_ctrl(%p, %d, %ld, NULL);", rc, ctx, SSL_CTRL_OPTIONS, SSL_OP_NO_SSLv2);
-      mg_log_event(pweb->plog, pweb, message_buffer, "TLS: p_SSL_CTX_ctrl", 0);
-   }
-   if (rc == 0) {
-      sprintf(message_buffer, "%d = SSL_CTX_ctrl(%p, %d, %ld, NULL);", rc, ctx, SSL_CTRL_OPTIONS, SSL_OP_NO_SSLv2);
-      mg_log_event(pweb->plog, pweb, message_buffer, "TLS: SSL_CTX_set_options: Error", 0);
-      rc = CACHE_NOCON;
-      goto mgtls_open_session_exit;
+   if (mg_tls_so->p_SSL_CTX_ctrl) {
+      rc = mg_tls_so->p_SSL_CTX_ctrl(ctx, SSL_CTRL_OPTIONS, SSL_OP_NO_SSLv2, NULL);
+      if (pweb->plog->log_tls > 0) {
+         sprintf(message_buffer, "%d = SSL_CTX_ctrl(%p, %d, %ld, NULL);", rc, ctx, SSL_CTRL_OPTIONS, SSL_OP_NO_SSLv2);
+         mg_log_event(pweb->plog, pweb, message_buffer, "TLS: SSL_CTX_ctrl", 0);
+      }
    }
 #else
    if (mg_tls_so->p_SSL_CTX_set_options) {
       rc = mg_tls_so->p_SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2);
       if (pweb->plog->log_tls > 0) {
          sprintf(message_buffer, "%d = SSL_CTX_set_options(%p, %d);", rc, ctx, SSL_OP_NO_SSLv2);
-         mg_log_event(pweb->plog, pweb, message_buffer, "TLS: p_SSL_CTX_ctrl", 0);
+         mg_log_event(pweb->plog, pweb, message_buffer, "TLS: SSL_CTX_set_options", 0);
       }
-      if (rc == 0) {
-         sprintf(message_buffer, "%d = SSL_CTX_set_options(%p, %d);", rc, ctx, SSL_OP_NO_SSLv2);
-         mg_log_event(pweb->plog, pweb, message_buffer, "TLS: SSL_CTX_set_options: Error", 0);
-         rc = CACHE_NOCON;
-         goto mgtls_open_session_exit;
-      }
-   }
-   else {
-      strcpy(message_buffer, "Missing Function");
-      mg_log_event(pweb->plog, pweb, message_buffer, "TLS: SSL_CTX_set_options: Error", 0);
-      rc = CACHE_NOCON;
-      goto mgtls_open_session_exit;
    }
 #endif
 
@@ -520,10 +504,10 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 int mgtls_crypt_load_library(MGWEB *pweb)
 {
-   int n, result, libnam_plen;
+   int n, n1, result, libnam_plen;
    char error_message[DBX_ERROR_SIZE];
-   char fun[64];
-   char *libnam[16];
+   char fun[64], libs[256];
+   char *libnam[16], *p1, *p2;
    DBXCRYPTSO *p_crypt_so;
 
    if (mg_crypt_so && mg_crypt_so->loaded) {
@@ -565,22 +549,29 @@ int mgtls_crypt_load_library(MGWEB *pweb)
       }
    }
 
-   n = 0;
-#if defined(_WIN32)
-   libnam[n ++] = (char *) DBX_CRYPT_DLL;
-#else
-#if defined(MACOSX)
-   libnam[n ++] = (char *) DBX_CRYPT_DYLIB;
-   libnam[n ++] = (char *) DBX_CRYPT_SO;
-#else
-   libnam[n ++] = (char *) DBX_CRYPT_SO;
-   libnam[n ++] = (char *) DBX_CRYPT_DYLIB;
-#endif
-#endif
-   libnam[n ++] = NULL;
+   /* v2.3.22 */
+   strncpy(libs, DBX_CRYPT_LIB, 250);
+   libs[250] = '\0';
+   p1 = libs;
+   n1 = 0;
+   for (n = 0; n < 16; n ++) {
+      p2 = strstr(p1, " ");
+      if (p2)
+         *p2 = '\0';
+      if (p1[0]) {
+         libnam[n1 ++] = p1;
+      }
+      if (!p2)
+         break;
+      p1 = (p2 + 1);
+   }
+   libnam[n1] = NULL;
 
    for (n = 0; libnam[n]; n ++) {
       strcpy(p_crypt_so->libnam + libnam_plen, libnam[n]);
+      if (pweb->plog->log_tls > 0) { /* v2.3.22 */
+         mg_log_event(pweb->plog, pweb, p_crypt_so->libnam, "TLS: Attepting to load the cryptography library", 0);
+      }
       p_crypt_so->p_library = mg_dso_load(p_crypt_so->libnam);
       if (p_crypt_so->p_library) {
          break;
@@ -649,6 +640,8 @@ int mgtls_crypt_load_library(MGWEB *pweb)
    if (!p_crypt_so->p_library) {
       goto mgtls_crypt_load_library_exit;
    }
+
+   pweb->error[0] = '\0'; /* v2.3.22 */
 
    strcpy(fun, "OpenSSL_version");
    p_crypt_so->p_OpenSSL_version = (const char * (*) (int)) mg_dso_sym(p_crypt_so->p_library, (char *) fun);
@@ -833,10 +826,10 @@ int mgtls_crypt_unload_library(void)
 
 int mgtls_tls_load_library(MGWEB *pweb)
 {
-   int n, result, libnam_plen;
+   int n, n1, result, libnam_plen;
    char error_message[DBX_ERROR_SIZE];
-   char fun[64];
-   char *libnam[16];
+   char fun[64], libs[256];
+   char *libnam[16], *p1, *p2;
    DBXTLSSO *p_tls_so;
 
    if (mg_tls_so && mg_tls_so->loaded) {
@@ -878,22 +871,29 @@ int mgtls_tls_load_library(MGWEB *pweb)
       }
    }
 
-   n = 0;
-#if defined(_WIN32)
-   libnam[n ++] = (char *) DBX_TLS_DLL;
-#else
-#if defined(MACOSX)
-   libnam[n ++] = (char *) DBX_TLS_DYLIB;
-   libnam[n ++] = (char *) DBX_TLS_SO;
-#else
-   libnam[n ++] = (char *) DBX_TLS_SO;
-   libnam[n ++] = (char *) DBX_TLS_DYLIB;
-#endif
-#endif
-   libnam[n ++] = NULL;
+   /* v2.3.22 */
+   strncpy(libs, DBX_TLS_LIB, 250);
+   libs[250] = '\0';
+   p1 = libs;
+   n1 = 0;
+   for (n = 0; n < 16; n ++) {
+      p2 = strstr(p1, " ");
+      if (p2)
+         *p2 = '\0';
+      if (p1[0]) {
+         libnam[n1 ++] = p1;
+      }
+      if (!p2)
+         break;
+      p1 = (p2 + 1);
+   }
+   libnam[n1] = NULL;
 
    for (n = 0; libnam[n]; n ++) {
       strcpy(p_tls_so->libnam + libnam_plen, libnam[n]);
+      if (pweb->plog->log_tls > 0) { /* v2.3.22 */
+         mg_log_event(pweb->plog, pweb, p_tls_so->libnam, "TLS: Attepting to load the TLS library", 0);
+      }
       p_tls_so->p_library = mg_dso_load(p_tls_so->libnam);
       if (p_tls_so->p_library) {
          break;
@@ -962,6 +962,8 @@ int mgtls_tls_load_library(MGWEB *pweb)
    if (!p_tls_so->p_library) {
       goto mgtls_tls_load_library_exit;
    }
+
+   pweb->error[0] = '\0'; /* v2.3.22 */
 
    strcpy(fun, "SSL_library_init");
    p_tls_so->p_SSL_library_init = (int (*) (void)) mg_dso_sym(p_tls_so->p_library, (char *) fun);
