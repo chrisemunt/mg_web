@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-18 August 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+25 August 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.3; Revision 21.
+* Current Release: Version: 2.3; Revision 22.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -225,3 +225,11 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Introduce support for TLS-secured connectivity between mg\_web and the DB Superserver.
 	* This enhancement is available for InterSystems DB Servers only.
 	* This enhancement requires DB Superserver version 4.4; Revision 23 (or later).
+
+### v2.3.22 (25 August 2021)
+
+* Support the renamed TLS libraries introduced with OpenSSL v1.1.
+	* libeay32.dll was renamed as libcrypto.dll (or libcrypto-1\_1-x64.dll under x64 Windows and libcrypto-1\_1.dll for x86 Windows).
+	* ssleay32.dll was renamed as libssl.dll (or libssl-1\_1-x64.dll under x64 Windows and libssl-1\_1.dll for x86 Windows).
+* Correct a memory initialization fault that could occasionally lead to connectivity failures between **mg\_web** and the DB Superserver.
+	* Recommend that **mg\_web** is not used with DB Superserver v4.4.23. 
