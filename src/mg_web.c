@@ -120,6 +120,12 @@ Version 2.3.22 25 August 2021:
       ssleay32.dll was renamed as libssl.dll (or libssl-1_1-x64.dll under x64 Windows and libssl-1_1.dll for x86 Windows).
    Correct a memory initialization fault that could occasionally lead to connectivity failures between mg_web and the DB Superserver.
 	   Recommend that mg_web is not used with DB Superserver v4.4.23. 
+
+Version 2.3.23 1 September 2021:
+   Make DB Server names case-insensitive in any server affinity cookie values (the same change was applied to server affinity variables in v2.1.17).
+   Improve the validation of values assigned to server affinity variables.
+   Introduce a verbose (v) log level.  If set, the key processing steps involved in extracting DB server affinity variables (and cookies). The DB server name chosen will be recorded for each request. 
+
 */
 
 
@@ -2300,7 +2306,7 @@ int mg_find_sa_variable(MGWEB *pweb)
 
 int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char *nvpairs, int nvpairs_len)
 {
-   int server_no, n, len;
+   int server_no, server_no0, n, len, found;
    unsigned char cnvz;
    char *pn, *pv, *pz;
    char sname[64];
@@ -2309,6 +2315,8 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
    nvpairs[nvpairs_len] = '\0';
    server_no = -1;
 
+   *sname = '\0'; 
+   found = 0;
    pn = strstr((char *) nvpairs, name);
    while (pn) {
       if (pn == (char *) nvpairs || *(pn - 1) == '&') {
@@ -2319,15 +2327,20 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
                *pz = '\0';
             }
             len = (int) strlen(pv);
+            found = 1;
 
             if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
-               server_no = (int) strtol(pv, NULL, 10);
+               server_no0 = (int) strtol(pv, NULL, 10);
+               if (server_no0 < 32 && pweb->ppath->servers[server_no0].name) { /* v2.3.23 */
+                  server_no = server_no0;
+                  strcpy(sname, pweb->ppath->servers[server_no].lcname);
+               }
             }
             else if (len < 60) { /* v2.1.17 */
+               /* v2.1.17 */
+               strcpy(sname, pv);
+               mg_lcase(sname);
                for (n = 0; pweb->ppath->servers[n].name; n ++) {
-                  /* v2.1.17 */
-                  strcpy(sname, pv);
-                  mg_lcase(sname);
                   if (!strcmp(pweb->ppath->servers[n].lcname, sname)) {
                      server_no = n;
                      break;
@@ -2348,19 +2361,29 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
 
    nvpairs[nvpairs_len] = cnvz;
 
-/*
-   {
+   if (pweb->plog->log_verbose) { /* v2.3.23 */
+      int len;
       char bufferx[256];
-      if (server_no == -1) {
-         sprintf(bufferx, "mg_find_sa_variable_ex: name=%s; server_no=%d (not found)", name, server_no);
-         mg_log_buffer(pweb->plog, pweb, (char *) nvpairs, nvpairs_len, bufferx, 0);
+
+      len = nvpairs_len;
+      if (nvpairs_len > 511) {
+         len = 511;
+      }
+      if (found) {
+         if (server_no != -1) {
+            sprintf(bufferx, "mg_web:mg_find_sa_variable_ex: Server Affinity Variable '%s' found; Server number to use: %d (%s)%s", name, server_no, sname, (len == nvpairs_len) ? "" : " First 511 Bytes of request content ...");
+            mg_log_buffer(pweb->plog, pweb, (char *) nvpairs, len, bufferx, 0);
+         }
+         else {
+            sprintf(bufferx, "mg_web:mg_find_sa_variable_ex: Server Affinity Variable '%s' found but set to a non-valid value%s", name, (len == nvpairs_len) ? "" : " First 511 Bytes of request content ...");
+            mg_log_buffer(pweb->plog, pweb, (char *) nvpairs, len, bufferx, 0);
+         }
       }
       else {
-         sprintf(bufferx, "mg_find_sa_variable_ex: name=%s; server_no=%d", name, server_no);
-         mg_log_buffer(pweb->plog, pweb, (char *) nvpairs, nvpairs_len, bufferx, 0);
+         sprintf(bufferx, "mg_web:mg_find_sa_variable_ex: Server Affinity Variable '%s' not found%s", name, (len == nvpairs_len) ? "" : " First 511 Bytes of request content ...");
+         mg_log_buffer(pweb->plog, pweb, (char *) nvpairs, len, bufferx, 0);
       }
    }
-*/
 
    return server_no;
 }
@@ -2369,12 +2392,14 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
 /* v2.1.15 */
 int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned char *content, int content_len)
 {
-   int server_no, n, nc, nn, blen, len;
+   int server_no, server_no0, n, nc, nn, blen, len, found;
    char *ph, *phz, *pn, *pv, *pz;
    char cname[64], sname[64];
 /*
    mg_log_buffer(pweb->plog, pweb, (char *) content, content_len, "Multipart Payload", 0);
 */
+   *sname = '\0';
+   found = 0;
    server_no = -1;
    blen = (int) strlen(pweb->boundary);
    for (nc = 0; nc < (content_len - 3); nc ++) {
@@ -2413,9 +2438,14 @@ int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned ch
                      }
 */
                      if (!strcmp(name, cname)) {
+                        found = 1;
                         len = (int) strlen(pv);
                         if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
-                           server_no = (int) strtol(pv, NULL, 10);
+                           server_no0 = (int) strtol(pv, NULL, 10);
+                           if (server_no0 < 32 && pweb->ppath->servers[server_no0].name) { /* v2.3.23 */
+                              server_no = server_no0;
+                              strcpy(sname, pweb->ppath->servers[server_no].lcname);
+                           }
                         }
                         else if (len < 60) { /* v2.1.17 */
                            strcpy(sname, pv);
@@ -2455,19 +2485,46 @@ int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned ch
    }
 */
 
+   if (pweb->plog->log_verbose) { /* v2.3.23 */
+      int len;
+      char bufferx[256];
+
+      len = content_len;
+      if (content_len > 511) {
+         len = 511;
+      }
+      if (found) {
+         if (server_no != -1) {
+            sprintf(bufferx, "mg_web:mg_find_sa_variable_ex_mp: Server Affinity Variable '%s' found; Server number to use: %d (%s)%s", name, server_no, sname, (len == content_len) ? "" : " First 511 Bytes of request content ...");
+            mg_log_buffer(pweb->plog, pweb, (char *) content, len, bufferx, 0);
+         }
+         else {
+            sprintf(bufferx, "mg_web:mg_find_sa_variable_ex_mp: Server Affinity Variable '%s' found but set to a non-valid value%s", name, (len == content_len) ? "" : " First 511 Bytes of request content ...");
+            mg_log_buffer(pweb->plog, pweb, (char *) content, len, bufferx, 0);
+         }
+      }
+      else {
+         sprintf(bufferx, "mg_web:mg_find_sa_variable_ex_mp: Server Affinity Variable '%s' not found%s", name, (len == content_len) ? "" : " First 511 Bytes of request content ...");
+         mg_log_buffer(pweb->plog, pweb, (char *) content, len, bufferx, 0);
+      }
+   }
+
    return server_no;
 }
 
 
 int mg_find_sa_cookie(MGWEB *pweb)
 {
-   int server_no, n, rc, len, name_len;
+   int server_no, server_no0, n, rc, len, name_len, found;
    char *pn, *pv, *pz;
+   char sname[64];
 
    server_no = -1;
 
    name_len = (int) strlen(pweb->ppath->sa_cookie);
 
+   *sname = '\0';
+   found = 0;
    len = 4096;
    pweb->request_cookie = (char *) mg_malloc(NULL, len + 32, 0);
    if (!pweb->request_cookie) {
@@ -2501,12 +2558,20 @@ int mg_find_sa_cookie(MGWEB *pweb)
                *pz = '\0';
             }
 
+            found = 1;
+            len = (int) strlen(pv);
             if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
-               server_no = (int) strtol(pv, NULL, 10);
+               server_no0 = (int) strtol(pv, NULL, 10);
+               if (server_no0 < 32 && pweb->ppath->servers[server_no0].name) { /* v2.3.23 */
+                  server_no = server_no0;
+                  strcpy(sname, pweb->ppath->servers[server_no].lcname);
+               }
             }
-            else {
+            else if (len < 60) { /* v2.3.23 */
+               strcpy(sname, pv);
+               mg_lcase(sname);
                for (n = 0; pweb->ppath->servers[n].name; n ++) {
-                  if (!strcmp(pweb->ppath->servers[n].name, pv)) {
+                  if (!strcmp(pweb->ppath->servers[n].lcname, sname)) {
                      server_no = n;
                      break;
                   }
@@ -2537,6 +2602,25 @@ int mg_find_sa_cookie(MGWEB *pweb)
       }
    }
 */
+
+   if (pweb->plog->log_verbose) { /* v2.3.23 */
+      char bufferx[256];
+
+      if (found) {
+         if (server_no != -1) {
+            sprintf(bufferx, "mg_web:mg_find_sa_cookie: Server Affinity Cookie '%s' found; Server number to use: %d (%s)", pweb->ppath->sa_cookie, server_no, sname);
+            mg_log_buffer(pweb->plog, pweb, (char *) pweb->request_cookie, (int) strlen(pweb->request_cookie), bufferx, 0);
+         }
+         else {
+            sprintf(bufferx, "mg_web:mg_find_sa_cookie: Server Affinity Cookie '%s' found but set to a non-valid value", pweb->ppath->sa_cookie);
+            mg_log_buffer(pweb->plog, pweb, (char *) pweb->request_cookie, (int) strlen(pweb->request_cookie), bufferx, 0);
+         }
+      }
+      else {
+         sprintf(bufferx, "mg_web:mg_find_sa_cookie: Server Affinity Cookie '%s' not found", pweb->ppath->sa_cookie);
+         mg_log_buffer(pweb->plog, pweb, (char *) pweb->request_cookie, (int) strlen(pweb->request_cookie), bufferx, 0);
+      }
+   }
 
    return server_no;
 }
