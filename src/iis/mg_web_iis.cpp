@@ -68,6 +68,7 @@ typedef struct tagMGWEBIIS {
 
 IHttpServer * phttp_server = NULL;
 
+
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
 {
    switch (fdwReason)
