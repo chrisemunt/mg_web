@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-25 August 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+1 September 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.3; Revision 22.
+* Current Release: Version: 2.3; Revision 23.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -233,3 +233,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 	* ssleay32.dll was renamed as libssl.dll (or libssl-1\_1-x64.dll under x64 Windows and libssl-1\_1.dll for x86 Windows).
 * Correct a memory initialization fault that could occasionally lead to connectivity failures between **mg\_web** and the DB Superserver.
 	* Recommend that **mg\_web** is not used with DB Superserver v4.4.23. 
+
+### v2.3.23 (1 September 2021)
+
+* Make DB Server names case-insensitive in any server affinity cookie values (the same change was applied to server affinity variables in v2.1.17).
+* Improve the validation of values assigned to server affinity variables.
+* Introduce a verbose (v) log level.  If set, the key processing steps involved in extracting DB server affinity variables (and cookies). The DB server name chosen will be recorded for each request. 
