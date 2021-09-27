@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-1 September 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+27 September 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.3; Revision 23.
+* Current Release: Version: 2.4; Revision 24.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -239,3 +239,13 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Make DB Server names case-insensitive in any server affinity cookie values (the same change was applied to server affinity variables in v2.1.17).
 * Improve the validation of values assigned to server affinity variables.
 * Introduce a verbose (v) log level.  If set, the key processing steps involved in extracting DB server affinity variables (and cookies). The DB server name chosen will be recorded for each request. 
+
+### v2.4.24 (27 September 2021)
+
+* Introduce Administrator Facilities, implemented as REST requests.  The following operations are included:
+	* Listing the internal status of **mg\_web**.
+	* Retrieving the configuration file.
+	* Retrieving the event log file.
+	* Marking individual servers online/offline.
+* Improve the granularity of error reporting.
+
