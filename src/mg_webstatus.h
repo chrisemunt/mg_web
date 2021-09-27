@@ -28,5 +28,21 @@
 #ifndef MG_WEBSTATUS_H
 #define MG_WEBSTATUS_H
 
+typedef struct tagMGADM {
+   short chunking_allowed;
+   int chunkno;
+   int len_alloc;
+   int len_used;
+   char *buf_addr;
+   char *filename;
+} MGADM, *LPMGADM;
+
+
+int mg_admin      (MGWEB *pweb);
+int mg_status     (MGWEB *pweb, MGADM *padm, int context);
+int mg_get_file   (MGWEB *pweb, MGADM *padm, int context);
+int mg_status_add (MGWEB *pweb, MGADM *padm, char *data, int data_len, int context);
+int mg_get_value  (char *json, char *name, char *value);
+
 #endif
 

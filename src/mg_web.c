@@ -20,7 +20,7 @@
    | distributed under the License is distributed on an "AS IS" BASIS,        |
    | WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. |
    | See the License for the specific language governing permissions and      |
-   | limitations under the License.                                           |      
+   | limitations under the License.                                           |
    |                                                                          |
    ----------------------------------------------------------------------------
 */
@@ -126,6 +126,10 @@ Version 2.3.23 1 September 2021:
    Improve the validation of values assigned to server affinity variables.
    Introduce a verbose (v) log level.  If set, the key processing steps involved in extracting DB server affinity variables (and cookies). The DB server name chosen will be recorded for each request. 
 
+Version 2.4.24 27 September 2021:
+   Introduce Administrator Facilities.  Implemented as REST requests.
+   Improve the granularity of error reporting.
+
 */
 
 
@@ -142,11 +146,11 @@ extern int errno;
 
 MGSYS                mg_system         = {0, 0, 0, 0, 0, 0, "", "", "", "", NULL, NULL, NULL, NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, 0, 0, "", ""}};
 static NETXSOCK      netx_so           = {0, 0, 0, 0, 0, 0, 0, {'\0'}};
-static DBXCON *      mg_connection     = NULL;
+DBXCON *             mg_connection     = NULL;
 
-static MGSRV *       mg_server         = NULL;
-static MGPATH *      mg_path           = NULL;
-static MGTLS *       mg_tls            = NULL; /* v2.3.21 */
+MGSRV *              mg_server         = NULL;
+MGPATH *             mg_path           = NULL;
+MGTLS *              mg_tls            = NULL; /* v2.3.21 */
 
 MG_MALLOC            mg_ext_malloc     = NULL;
 MG_REALLOC           mg_ext_realloc    = NULL;
@@ -165,6 +169,7 @@ pthread_mutex_t      mg_global_mutex   = PTHREAD_MUTEX_INITIALIZER;
 
 int mg_web(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    int rc, len;
    unsigned char *p;
    char buffer[256];
@@ -192,6 +197,7 @@ __try {
       return CACHE_FAILURE;
    }
 
+   DBX_TRACE(1)
    strcpy(buffer, DBX_WEB_ROUTINE);
    len = (int) strlen((char *) buffer);
    strcpy(pweb->input_buf.buf_addr + 5, buffer);
@@ -208,9 +214,13 @@ __try {
    pweb->offs_content = (int) pweb->input_buf.len_used;
    pweb->input_buf.len_used += 5;
 
+   DBX_TRACE(2)
    rc = mg_get_all_cgi_variables(pweb);
+   DBX_TRACE(3)
    rc = mg_get_path_configuration(pweb);
 
+   /* v2.4.24 */
+   DBX_TRACE(4)
    if (!pweb->ppath || rc == CACHE_FAILURE) {
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
       mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
@@ -220,13 +230,17 @@ __try {
       return CACHE_FAILURE;
    }
 
+   if (pweb->ppath->admin) { /* v2.4.24 */
+      return mg_admin(pweb);
+   }
+
    if (mg_system.log.log_frames) {
       char bufferx[1024];
       sprintf(bufferx, "request=%s; configuration path=%s; server1=%s;", pweb->script_name_lc, pweb->ppath->name, pweb->ppath->servers[0].psrv->name);
       mg_log_event(pweb->plog, pweb, bufferx, "mg_web: information", 0);
    }
 
-
+   DBX_TRACE(5)
    pweb->psrv = pweb->ppath->servers[0].psrv;
    pweb->server_no = -1;
 
@@ -255,6 +269,7 @@ __try {
    pweb->input_buf.len_used += (len + 5);
 */
 
+   DBX_TRACE(6)
    strcpy(buffer, "server=01234567890123456789012345678901");
    len = 39;
    p = (unsigned char *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used + 5);
@@ -312,13 +327,14 @@ __try {
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBSYS, DBX_DTYPE_STR);
    pweb->input_buf.len_used += (len + 5);
 
-
+   DBX_TRACE(7)
    rc = mg_websocket_check(pweb);
 
    if (pweb->evented) {
       return rc;
    }
 
+   DBX_TRACE(8)
    pweb->request_long = 0;
    if (pweb->request_clen) {
       /* v2.2.18 */
@@ -359,6 +375,7 @@ __try {
       }
    }
 
+   DBX_TRACE(9)
    rc = mg_web_process(pweb);
 
    return rc;
@@ -372,10 +389,10 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(bufferx, 255, "Exception caught in f:mg_web: %x", code);
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_web: %x:%d", code, DBX_TRACE_VAR);
       mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
    }
-   __except (EXCEPTION_EXECUTE_HANDLER ) {
+   __except (EXCEPTION_EXECUTE_HANDLER) {
       ;
    }
 
@@ -387,15 +404,17 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 int mg_web_process(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    int rc, len, get, get1, close_connection, failover_no;
    unsigned char *p;
-   char buffer[256];
+   char buffer[256], info[256];
    DBXVAL *pval;
 
 #ifdef _WIN32
 __try {
 #endif
 
+   *info = '\0';
    close_connection = 0;
 
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr, pweb->input_buf.len_used, 0,  DBX_DSORT_EOD, DBX_DTYPE_STR8);
@@ -404,6 +423,7 @@ __try {
    len = (pweb->input_buf.len_used - (pweb->offs_content + 5));
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->offs_content, (unsigned long) 0, (unsigned long) len, DBX_DSORT_DATA, DBX_DTYPE_STR);
 
+   DBX_TRACE(1)
    /* param parameter */
    strcpy(buffer, "");
    len = (int) strlen((char *) buffer);
@@ -411,8 +431,10 @@ __try {
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_DATA, DBX_DTYPE_STR);
    pweb->input_buf.len_used += (len + 5);
 
+   DBX_TRACE(2)
    if (pweb->ppath->servers[1].psrv) { /* more than one server - look for affinity variable or cookie */
       if (pweb->ppath->sa_order == 1) { /* look for server affinity variable first */
+         DBX_TRACE(3)
          if (mg_find_sa_variable(pweb) == -1) {
             if (pweb->ppath->sa_cookie) {
                mg_find_sa_cookie(pweb);
@@ -420,7 +442,8 @@ __try {
          }
       }
       else if (pweb->ppath->sa_order == 2) { /* look for server affinity cookie first */
-        if (mg_find_sa_cookie(pweb) == -1) {
+         DBX_TRACE(4)
+         if (mg_find_sa_cookie(pweb) == -1) {
             if (pweb->ppath->sa_variables[0]) {
                mg_find_sa_variable(pweb);
             }
@@ -436,13 +459,17 @@ __try {
 }
 */
 
+   DBX_TRACE(5)
    failover_no = 0;
    pweb->failover_possible = 1;
 
 mg_web_process_failover:
 
+   pweb->mg_connect_called = 0;
+   DBX_TRACE(6)
    rc = mg_obtain_connection(pweb);
 
+   DBX_TRACE(7)
    if (rc == CACHE_FAILURE) { /* v2.1.13 */
       if (!pweb->error[0]) {
          strcpy(pweb->error, "Cannot connect to DB Server");
@@ -456,13 +483,19 @@ mg_web_process_failover:
 
       return 0;
    }
+   DBX_TRACE(20)
    if (rc != CACHE_SUCCESS) {
       if (!pweb->error[0]) {
          strcpy(pweb->error, "Cannot connect to DB Server");
       }
       mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
 
-      mg_server_offline(pweb, pweb->psrv, 0);
+      if (pweb->mg_connect_called) { /* v2.4.24 only mark a server offline on account of a new connection failure */
+         mg_server_offline(pweb, pweb->psrv, info, 0);
+         if (info[0]) {
+            mg_log_event(pweb->plog, pweb, info, "mg_web: connectivity", 0);
+         }
+      }
       /* v2.1.16 : DB Servers marked for exclusive use cannot failover to another server in the list */
       if (pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no && pweb->ppath->servers[pweb->server_no].exclusive == 0) {
          sprintf(pweb->error, "Cannot connect to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
@@ -479,12 +512,15 @@ mg_web_process_failover:
       return 0;
    }
 
+   DBX_TRACE(21)
    *(pweb->serverno) = (unsigned char) ((pweb->server_no / 10) + 48);
    *(pweb->serverno + 1) = (unsigned char) ((pweb->server_no % 10) + 48);
    strncpy(pweb->server, pweb->psrv->name, pweb->psrv->name_len);
    pweb->server[pweb->psrv->name_len] = '\0';
    mg_set_size((unsigned char *) pweb->requestno, pweb->requestno_in);
+   DBX_TRACE(22)
    if (pweb->request_long) { /* v2.2.18 */
+      DBX_TRACE(23)
       mg_set_size((unsigned char *) pweb->requestkey, (unsigned long) mg_current_process_id());
       mg_set_size((unsigned char *) (pweb->requestkey + 4), (unsigned long) pweb->requestno_in);
       sprintf(pweb->key, "%lu:%lu", (unsigned long) mg_current_process_id(), (unsigned long) pweb->requestno_in);
@@ -506,6 +542,7 @@ mg_web_process_failover:
    }
 */
 
+   DBX_TRACE(24)
    rc = mg_web_execute(pweb);
 
 /*
@@ -515,7 +552,7 @@ mg_web_process_failover:
       mg_log_buffer(pweb->plog, pweb, pweb->output_val.svalue.buf_addr + 5, pweb->output_val.svalue.len_used - 5, bufferx, 0);
    }
 */
-
+   DBX_TRACE(30)
    get = 0;
    if (rc == CACHE_SUCCESS) {
       pweb->response_headers = pweb->output_val.svalue.buf_addr + 10;
@@ -557,12 +594,14 @@ mg_web_process_failover:
          mg_log_buffer(pweb->plog, pweb, (char *) pweb->response_headers, (int) pweb->response_headers_len, bufferx, 0);
       }
 */
+      DBX_TRACE(40)
       p = (unsigned char *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4));
       strcpy((char *) p, pweb->response_headers);
       pweb->response_headers = (char *) p;
 
       mg_parse_headers(pweb);
 
+      DBX_TRACE(41)
       pweb->response_headers_len = (int) strlen(pweb->response_headers);
       if (pweb->ppath->sa_cookie) {
          if (pweb->tls) {
@@ -598,7 +637,17 @@ mg_web_process_failover:
       }
    }
    else { /* v2.1.13 */
-      mg_server_offline(pweb, pweb->psrv, 0);
+      DBX_TRACE(42)
+
+      if (pweb->mg_connect_called) { /* v2.4.24 only mark a server offline on account of a new connection failure */
+         mg_server_offline(pweb, pweb->psrv, info, 1);
+         if (info[0]) {
+            mg_log_event(pweb->plog, pweb, info, "mg_web: connectivity", 0);
+         }
+      }
+      else {
+         mg_release_connection(pweb, 1); /* v2.4.24 */
+      }
       /* v2.1.16 : DB Servers marked for exclusive use cannot failover to another server in the list */
       if (pweb->failover_possible && pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no && pweb->ppath->servers[pweb->server_no].exclusive == 0) {
          sprintf(pweb->error, "Cannot send request to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
@@ -608,6 +657,7 @@ mg_web_process_failover:
       }
    }
 
+   DBX_TRACE(50)
    if (rc != CACHE_SUCCESS) {
 
       /* v2.1.10 */
@@ -648,13 +698,16 @@ mg_web_process_failover:
 
    MG_LOG_RESPONSE_HEADER(pweb);
 
+   DBX_TRACE(60)
    if (pweb->pwsock) {
       rc = mg_websocket_connection(pweb);
       rc = mg_websocket_disconnect(pweb);
       return rc;
    }
 
+   DBX_TRACE(70)
    mg_submit_headers(pweb);
+   DBX_TRACE(71)
    if (get) {
       if (pweb->response_streamed) {
          if (pweb->wserver_chunks_response == 0) {
@@ -691,6 +744,7 @@ mg_web_process_failover:
       }
    }
 
+   DBX_TRACE(80)
    while (pweb->response_remaining > 0) {
 /*
       {
@@ -739,7 +793,12 @@ mg_web_process_failover:
       }
    }
 
+   DBX_TRACE(90)
    mg_cleanup(pweb);
+   DBX_TRACE(91)
+   if (pweb->pcon) { /* v2.4.24 */
+      pweb->pcon->no_requests ++;
+   }
    mg_release_connection(pweb, close_connection);
 
    return rc;
@@ -753,26 +812,30 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(bufferx, 255, "Exception caught in f:mg_web_process: %x", code);
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_web_process: %x:%d", code, DBX_TRACE_VAR);
       mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
    }
-   __except (EXCEPTION_EXECUTE_HANDLER ) {
+   __except (EXCEPTION_EXECUTE_HANDLER) {
       ;
    }
 
    return 0;
 }
 #endif
-
 }
 
 
 /* 2.0.8 */
 int mg_parse_headers(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    int len;
    char *pn, *ps, *pv, *pz;
    char head[64];
+
+#ifdef _WIN32
+__try {
+#endif
 
    pweb->response_clen_server = -1;
 
@@ -821,11 +884,32 @@ int mg_parse_headers(MGWEB *pweb)
    }
 */
    return CACHE_SUCCESS;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_parse_headers: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return CACHE_FAILURE;
+}
+#endif
 }
 
 
 int mg_web_execute(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    int rc, len, get;
    unsigned long offset, netbuf_used;
    unsigned char *netbuf;
@@ -859,6 +943,7 @@ __try {
    fun.routine_len = (int) strlen(routine);
    pweb->output_val.num.str = (char *) 0;
 
+   DBX_TRACE(1)
    MG_LOG_REQUEST_FRAME(pweb, netbuf, netbuf_used);
    MG_LOG_REQUEST_BUFFER(pweb, netbuf, netbuf_used);
 
@@ -870,6 +955,7 @@ __try {
    /* v2.1.10 */
 
    if (pcon->net_connection) {
+      DBX_TRACE(10)
       memcpy((void *) pweb->mode, (void *) "tcp", (size_t) 3);
       rc = netx_tcp_command(pweb, DBX_CMND_FUNCTION, 0);
    }
@@ -877,6 +963,7 @@ __try {
 
       ydb_string_t out, in1, in2, in3;
 
+      DBX_TRACE(20)
       memcpy((void *) pweb->mode, (void *) "api", (size_t) 3);
       pweb->failover_possible = 0;
       strcat(fun.label, "_zmgsis");
@@ -943,6 +1030,7 @@ __try {
       unsigned long ne;
       DBXCVAL cvalue;
 
+      DBX_TRACE(30)
       memcpy((void *) pweb->mode, (void *) "api", (size_t) 3);
       pweb->failover_possible = 0;
       strcpy(buffer, "");
@@ -1036,6 +1124,8 @@ __try {
 }
 */
 
+   DBX_TRACE(50)
+
    if (rc != CACHE_SUCCESS) {
       rc = CACHE_NOCON;
       if (!pweb->error[0]) {
@@ -1043,6 +1133,8 @@ __try {
       }
       goto mg_web_execute_exit;
    }
+
+   DBX_TRACE(51)
 
    len = mg_get_block_size((unsigned char *) pweb->output_val.svalue.buf_addr, 0, &(pweb->output_val.sort), &(pweb->output_val.type));
 
@@ -1056,13 +1148,17 @@ __try {
    }
 */
 
+   DBX_TRACE(52)
 
    if (pweb->output_val.sort == DBX_DSORT_EOD || pweb->output_val.sort == DBX_DSORT_ERROR) {
+      DBX_TRACE(53)
       rc = CACHE_FAILURE;
       strncpy(pweb->error, pweb->output_val.svalue.buf_addr + offset, len);
       pweb->error[len] = '\0';
       goto mg_web_execute_exit;
    }
+
+   DBX_TRACE(60)
 
 mg_web_execute_exit:
 
@@ -1077,14 +1173,14 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(bufferx, 255, "Exception caught in f:mg_web_execute: %x", code);
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_web_execute: %x:%d", code, DBX_TRACE_VAR);
       mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
    }
-   __except (EXCEPTION_EXECUTE_HANDLER ) {
+   __except (EXCEPTION_EXECUTE_HANDLER) {
       ;
    }
 
-   return 0;
+   return CACHE_FAILURE;
 }
 #endif
 }
@@ -1092,6 +1188,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 int mg_execute_request_long(MGWEB *pweb, int (*p_write_chunk) (MGWEB *, unsigned char *, unsigned int, int))
 {
+   DBX_TRACE_INIT(0)
    int rc, blen, bsize, ptr, tail_ptr, tail_len, chunk_no;
    unsigned int netbuf_used;
    unsigned char *netbuf;
@@ -1104,6 +1201,7 @@ __try {
    pweb->failover_possible = 0; /* can't failover after this point */
    netbuf = (unsigned char *) (pweb->request_content - 5);
    chunk_no = 0;
+   DBX_TRACE(1)
    while (1) {
       netbuf_used = pweb->request_csize + 5;
       tail_ptr = 0;
@@ -1129,6 +1227,7 @@ __try {
          mg_log_event(pweb->plog, pweb, bufferx, "HTTP Long Request 2", 0);
       }
 */
+      DBX_TRACE(2)
       rc = p_write_chunk(pweb, (unsigned char *) netbuf, netbuf_used, chunk_no);
       if (rc < 0) {
          break;
@@ -1138,6 +1237,7 @@ __try {
          break;
       }
 
+      DBX_TRACE(3)
       bsize = pweb->request_bsize;
       if (tail_ptr) {
          bsize -= tail_len;
@@ -1149,6 +1249,7 @@ __try {
          pweb->request_csize = bsize;
       }
 
+      DBX_TRACE(4)
       mg_client_read(pweb, (unsigned char *) (pweb->request_content + tail_len), pweb->request_csize);
       mg_add_block_size((unsigned char *) netbuf, 0, (pweb->request_csize + tail_len), DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
       pweb->request_clen_remaining -= pweb->request_csize;
@@ -1165,10 +1266,10 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(bufferx, 255, "Exception caught in f:mg_web_execute_request_long: %x", code);
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_web_execute_request_long: %x:%d", code, DBX_TRACE_VAR);
       mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
    }
-   __except (EXCEPTION_EXECUTE_HANDLER ) {
+   __except (EXCEPTION_EXECUTE_HANDLER) {
       ;
    }
 
@@ -1413,6 +1514,7 @@ int mg_write_chunk_ydb(MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_u
 
 int mg_web_http_error(MGWEB *pweb, int http_status_code, int custompage)
 {
+   DBX_TRACE_INIT(0)
    char *custompage_url;
    char buffer[64];
 
@@ -1460,10 +1562,10 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(bufferx, 255, "Exception caught in f:mg_web_http_error: %x", code);
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_web_http_error: %x:%d", code, DBX_TRACE_VAR);
       mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
    }
-   __except (EXCEPTION_EXECUTE_HANDLER ) {
+   __except (EXCEPTION_EXECUTE_HANDLER) {
       ;
    }
 
@@ -1473,8 +1575,63 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
+int mg_web_simple_response(MGWEB *pweb, char *text, char *error, int context)
+{
+   int len;
+   char *p;
+   char buffer[64], response[256];
+
+   p = NULL;
+   len = 0;
+   if (context == 0) {
+      if (text) {
+         p = text;
+         len = (int) strlen(text);
+      }
+      else if (error) {
+         p = error;
+         len = (int) strlen(error);
+      }
+      strcpy(pweb->response_headers, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n");
+
+      if (len) {
+         sprintf(buffer, "Content-Length: %d\r\n\r\n", len);
+      }
+      else {
+         strcpy(buffer, "\r\n");
+      }
+      strcat(pweb->response_headers, buffer);
+      pweb->response_headers_len = (int) strlen(pweb->response_headers);
+   }
+   else {
+      sprintf(response, "{\r\n   \"ok\": %d,\r\n   \"result\": \"%s\",\r\n   \"error\": \"%s\"\r\n}\r\n", error ? 0 : 1, text ? text : "", error ? error : "");
+      len = (int) strlen(response);
+      p = response;
+
+      strcpy(pweb->response_headers, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n");
+
+      if (len) {
+         sprintf(buffer, "Content-Length: %d\r\n\r\n", len);
+         strcat(pweb->response_headers, buffer);
+      }
+      else {
+         strcpy(buffer, "\r\n");
+      }
+      strcat(pweb->response_headers, buffer);
+      pweb->response_headers_len = (int) strlen(pweb->response_headers);
+   }
+
+   mg_submit_headers(pweb);
+   if (p) {
+      mg_client_write(pweb, (unsigned char *) p, (int) len);
+   }
+   return CACHE_SUCCESS;
+}
+
+
 int mg_get_all_cgi_variables(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    int result, rc, n, len, lenv;
    char *p;
    char buffer[32];
@@ -1540,10 +1697,10 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(bufferx, 255, "Exception caught in f:mg_get_all_cgi_variables: %x", code);
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_get_all_cgi_variables: %x:%d", code, DBX_TRACE_VAR);
       mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
    }
-   __except (EXCEPTION_EXECUTE_HANDLER ) {
+   __except (EXCEPTION_EXECUTE_HANDLER) {
       ;
    }
 
@@ -1556,6 +1713,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 int mg_get_path_configuration(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    int rc, len_max;
    MGPATH *ppath, *ppath_max;
 
@@ -1604,24 +1762,28 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(bufferx, 255, "Exception caught in f:mg_get_path_configuration: %x", code);
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_get_path_configuration: %x:%d", code, DBX_TRACE_VAR);
       mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
    }
-   __except (EXCEPTION_EXECUTE_HANDLER ) {
+   __except (EXCEPTION_EXECUTE_HANDLER) {
       ;
    }
 
    return 0;
 }
 #endif
-
 }
 
 
 int mg_add_cgi_variable(MGWEB *pweb, char *name, int name_len, char *value, int value_len)
 {
+   DBX_TRACE_INIT(0)
    int alloc, len;
    char *p;
+
+#ifdef _WIN32
+__try {
+#endif
 
    alloc = (pweb->input_buf.len_alloc - pweb->input_buf.len_used);
    if ((name_len + value_len + 6) >= alloc) {
@@ -1642,22 +1804,52 @@ int mg_add_cgi_variable(MGWEB *pweb, char *name, int name_len, char *value, int 
    pweb->input_buf.len_used += (len + 5);
 
    return CACHE_SUCCESS;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_add_cgi_variable: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return CACHE_FAILURE;
+}
+#endif
 }
 
 
 int mg_obtain_connection(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    int rc, use_existing;
    DBXCON *pcon, *pcon_last, *pcon_free;
+   char bufferx[256], info[256];
    MGSRV *psrv;
    MGPATH *ppath;
    char *p, *p1, *p2;
+
+#ifdef _WIN32
+__try {
+#endif
 
    psrv = pweb->psrv;
    ppath = pweb->ppath;
    use_existing = 0;
    pcon_free = NULL;
    pcon_last = NULL;
+   bufferx[0] = '\0';
+   info[0] = '\0';
+
+   DBX_TRACE(1)
 
    mg_enter_critical_section((void *) &mg_global_mutex);
 
@@ -1667,16 +1859,33 @@ int mg_obtain_connection(MGWEB *pweb)
          psrv = ppath->servers[pweb->server_no].psrv;
       }
       else {
+         /* v2.4.24 */
+         if (ppath->servers[pweb->server_no].psrv)
+            sprintf(bufferx, "Preferred DB Server %s not available; offline=%d;", ppath->servers[pweb->server_no].psrv->name, ppath->servers[pweb->server_no].psrv->offline);
+         else
+            sprintf(bufferx, "Preferred DB Server number %d not available", pweb->server_no);
          pweb->server_no = -1; /* preferred server not available, start again */
       }
    }
+   else if (pweb->server_no != -1) {
+      sprintf(bufferx, "Out of range DB Server number %d", pweb->server_no);
+      pweb->server_no = -1; /* bad server number */
+   }
+
    if (pweb->server_no == -1) {
-      pweb->server_no = mg_obtain_server(pweb, 0);
+      pweb->server_no = mg_obtain_server(pweb, info, 0);
       if (pweb->server_no == -1) { /* no online servers in list */
          pweb->server_no = 0;
          pweb->psrv = ppath->servers[pweb->server_no].psrv;
-         mg_server_online(pweb, NULL, 0); /* v2.2.19 */
+         mg_server_online(pweb, NULL, info, 0); /* v2.2.19 */
          mg_leave_critical_section((void *) &mg_global_mutex);
+         /* v2.4.24 */
+         if (bufferx[0]) {
+            mg_log_event(pweb->plog, pweb, bufferx, "mg_web: connectivity error", 0);
+         }
+         if (info[0]) {
+            mg_log_event(pweb->plog, pweb, info, "mg_web: connectivity", 0);
+         }
          strcpy(pweb->error, "All available DB Servers are currently offline");
          return CACHE_FAILURE;
       }
@@ -1709,6 +1918,7 @@ int mg_obtain_connection(MGWEB *pweb)
          pcon->alloc = 1;
          pcon->inuse = 1;
          pcon->closed = 0;
+         pcon->no_requests = 0;
       }
       else {
          pcon = (DBXCON *) mg_malloc(NULL, sizeof(DBXCON), 0);
@@ -1723,6 +1933,7 @@ int mg_obtain_connection(MGWEB *pweb)
             pcon->alloc = 1;
             pcon->inuse = 1;
             pcon->closed = 0;
+            pcon->no_requests = 0;
             pcon->int_pipe[0] = 0;
             pcon->int_pipe[1] = 0;
          }
@@ -1730,8 +1941,17 @@ int mg_obtain_connection(MGWEB *pweb)
    }
    if (!pweb->requestno_in) {
       pweb->requestno_in = mg_system.requestno ++;
+      psrv->no_requests ++;
    }
    mg_leave_critical_section((void *) &mg_global_mutex);
+
+   /* v2.4.24 */
+   if (bufferx[0]) {
+      mg_log_event(pweb->plog, pweb, bufferx, "mg_web: connectivity error", 0);
+   }
+   if (info[0]) {
+      mg_log_event(pweb->plog, pweb, info, "mg_web: connectivity", 0);
+   }
 
    pweb->psrv = psrv;
    if (!pcon) {
@@ -1753,6 +1973,15 @@ int mg_obtain_connection(MGWEB *pweb)
 */
 
    if (use_existing) {
+      if (pcon->psrv->offline == 2) { /* v2.2.20 */
+         char buffer[256];
+         sprintf(buffer, "Previously offline DB Server %s is due for a health check; marking as online", pweb->psrv ? pweb->psrv->name : "null");
+         mg_log_event(pweb->plog, pweb, buffer, "mg_web: information", 0);
+         mg_server_online(pweb, pcon->psrv, info, 0);
+         if (info[0]) {
+            mg_log_event(pweb->plog, pweb, info, "mg_web: connectivity", 0);
+         }
+      }
       return CACHE_SUCCESS;
    }
 
@@ -1818,7 +2047,10 @@ int mg_obtain_connection(MGWEB *pweb)
          char buffer[256];
          sprintf(buffer, "Previously offline DB Server %s has passed its health check; marking as online", pweb->psrv ? pweb->psrv->name : "null");
          mg_log_event(pweb->plog, pweb, buffer, "mg_web: information", 0);
-         mg_server_online(pweb, pcon->psrv, 0);
+         mg_server_online(pweb, pcon->psrv, info, 0);
+         if (info[0]) {
+            mg_log_event(pweb->plog, pweb, info, "mg_web: connectivity", 0);
+         }
       }
    }
    else {
@@ -1828,17 +2060,43 @@ int mg_obtain_connection(MGWEB *pweb)
    }
 
    return rc;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_obtain_connection: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return 0;
+}
+#endif
 }
 
 
-int mg_obtain_server(MGWEB *pweb, int context)
+int mg_obtain_server(MGWEB *pweb, char *info, int context)
 {
+   DBX_TRACE_INIT(0)
    int server_no, server_no_start;
    time_t time_now;
+
+#ifdef _WIN32
+__try {
+#endif
 
    time_now = time(NULL);
    server_no_start = pweb->ppath->server_no;
    server_no = -1;
+   DBX_TRACE(1)
    while (server_no == -1) {
 
       /* v2.1.16 */
@@ -1852,18 +2110,17 @@ int mg_obtain_server(MGWEB *pweb, int context)
       /* v2.2.20 */
       if (pweb->ppath->servers[pweb->ppath->server_no].exclusive == 0) {
          if (pweb->ppath->servers[pweb->ppath->server_no].psrv->offline == 1 && pweb->ppath->servers[pweb->ppath->server_no].psrv->health_check > 0 && difftime(time_now, pweb->ppath->servers[pweb->ppath->server_no].psrv->time_offline) > pweb->ppath->servers[pweb->ppath->server_no].psrv->health_check) {
-/*
-            {
-               char buffer[256];
-               sprintf(buffer, "pweb->ppath->server_no=%d; psrv->health_check=%d; time_offline=%d;", pweb->ppath->server_no, pweb->ppath->servers[pweb->ppath->server_no].psrv->health_check, (int) difftime(time_now, pweb->ppath->servers[pweb->ppath->server_no].psrv->time_offline));
-               mg_log_event(pweb->plog, pweb, buffer, "mg_obtain_server: retry this offline server as health_check time is up", 0);
+
+            DBX_TRACE(2)
+            if (info) {
+               sprintf(info, "Retry DB Server %s; number=%d; health_check=%d; time_offline=%d;", pweb->ppath->servers[pweb->ppath->server_no].psrv->name, pweb->ppath->server_no, pweb->ppath->servers[pweb->ppath->server_no].psrv->health_check, (int) difftime(time_now, pweb->ppath->servers[pweb->ppath->server_no].psrv->time_offline));
             }
-*/
             pweb->ppath->servers[pweb->ppath->server_no].psrv->time_offline = time(NULL); /* push time offline forward so only this request tries */
             pweb->ppath->servers[pweb->ppath->server_no].psrv->offline = 2; /* indicate that we're retrying this offline server */
             server_no = pweb->ppath->server_no;
          }
          else if (pweb->ppath->servers[pweb->ppath->server_no].psrv->offline == 0) { /* server online so we can use it */
+            DBX_TRACE(3)
             server_no = pweb->ppath->server_no;
          }
       }
@@ -1872,6 +2129,7 @@ int mg_obtain_server(MGWEB *pweb, int context)
          server_no = pweb->ppath->server_no;
       }
 */
+      DBX_TRACE(4)
       if (pweb->ppath->load_balancing || pweb->ppath->servers[pweb->ppath->server_no].psrv->offline > 0) { /* increment core server number if one is offline or load balancing is on */
          pweb->ppath->server_no ++;
          if (!pweb->ppath->servers[pweb->ppath->server_no].psrv) {
@@ -1882,21 +2140,56 @@ int mg_obtain_server(MGWEB *pweb, int context)
          break;
       }
    }
+
+   DBX_TRACE(10)
    return server_no;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_obtain_server: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return -1;
+}
+#endif
 }
 
 
-int mg_server_offline(MGWEB *pweb, MGSRV *psrv, int context)
+int mg_server_offline(MGWEB *pweb, MGSRV *psrv, char *info, int context)
 {
+   DBX_TRACE_INIT(0)
    DBXCON *pcon;
 
-   if (!psrv || !pweb->ppath) {
-      return -1;
+#ifdef _WIN32
+__try {
+#endif
+
+   if (context == 10) { /* from admin */
+      if (!psrv) {
+         return -1;
+      }
    }
-   if (!pweb->ppath->servers[1].psrv) { /* only one server, therefore no failover */
-      return -1;
+   else {
+      if (!psrv || !pweb->ppath) {
+         return -1;
+      }
+      if (!pweb->ppath->servers[1].psrv) { /* only one server, therefore no failover */
+         return -1;
+      }
    }
 
+   DBX_TRACE(1)
    /* block new connections to this server */
    mg_enter_critical_section((void *) &mg_global_mutex);
 
@@ -1905,24 +2198,57 @@ int mg_server_offline(MGWEB *pweb, MGSRV *psrv, int context)
 
    mg_leave_critical_section((void *) &mg_global_mutex);
 
+   /* v2.4.24 */
+   if (info) {
+      sprintf(info, "DB Server %s marked offline; context=%d;", psrv->name, context);
+   }
+
+   DBX_TRACE(2)
    pcon = mg_connection;
    while (pcon) {
       if (pcon->alloc && pcon->psrv == psrv) {
          if (psrv->net_connection == 1 && pcon->inuse == 0) { /* network */
+            DBX_TRACE(3)
             mg_release_connection(pweb, 1);
          }
       }
       pcon = pcon->pnext;
    }
+   DBX_TRACE(10)
 
    return 0;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_server_offline: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return 0;
+}
+#endif
 }
 
 
 /* v2.2.19 */
-int mg_server_online(MGWEB *pweb, MGSRV *psrv, int context)
+int mg_server_online(MGWEB *pweb, MGSRV *psrv, char *info, int context)
 {
+   DBX_TRACE_INIT(0)
    int server_no;
+
+#ifdef _WIN32
+__try {
+#endif
 
    if (psrv) { /* just mark one server as online */
       if (context) {
@@ -1933,6 +2259,12 @@ int mg_server_online(MGWEB *pweb, MGSRV *psrv, int context)
       if (context) {
          mg_leave_critical_section((void *) &mg_global_mutex);
       }
+
+      /* v2.4.24 */
+      if (info) {
+         sprintf(info, "DB Server %s marked online; context=%d;", psrv->name, context);
+      }
+
       return 0;
    }
 
@@ -1955,19 +2287,50 @@ int mg_server_online(MGWEB *pweb, MGSRV *psrv, int context)
       mg_leave_critical_section((void *) &mg_global_mutex);
    }
 
+   /* v2.4.24 */
+   if (info) {
+      sprintf(info, "All DB Servers marked online; context=%d;", context);
+   }
+
 /*
    mg_log_event(pweb->plog, pweb, "Mark all servers for this path as 'online' following an 'All DB Servers offline' event", "mg_server_online", 0);
 */
 
    return 0;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_server_online: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return 0;
+}
+#endif
 }
 
 
 int mg_connect(MGWEB *pweb, int context)
 {
+   DBX_TRACE_INIT(0)
    int rc;
    DBXCON *pcon;
 
+#ifdef _WIN32
+__try {
+#endif
+
+   pweb->mg_connect_called ++;
    pcon = pweb->pcon;
 
    rc = CACHE_SUCCESS;
@@ -2045,13 +2408,38 @@ int mg_connect(MGWEB *pweb, int context)
       return CACHE_SUCCESS;
    else
       return CACHE_NOCON;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_connect: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return CACHE_NOCON;
+}
+#endif
 }
 
 
 int mg_release_connection(MGWEB *pweb, int close_connection)
 {
+   DBX_TRACE_INIT(0)
    int rc;
    DBXCON *pcon;
+
+#ifdef _WIN32
+__try {
+#endif
 
    pcon = pweb->pcon;
 
@@ -2108,13 +2496,38 @@ int mg_release_connection(MGWEB *pweb, int close_connection)
    pcon->alloc = 0;
 
    return rc;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_release_connection: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return 0;
+}
+#endif
 }
 
 
 MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen)
 {
+   DBX_TRACE_INIT(0)
    unsigned int len_alloc;
    MGWEB *pweb;
+
+#ifdef _WIN32
+__try {
+#endif
 
    len_alloc = 128000 + request_clen;
    if (len_alloc < mg_system.request_buffer_size) { /* v2.1.10 */
@@ -2164,13 +2577,38 @@ MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen)
    }
 */
    return pweb;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_obtain_request_memory: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return NULL;
+}
+#endif
 }
 
 
 DBXVAL * mg_extend_response_memory(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    unsigned int len_alloc;
    DBXVAL *pval;
+
+#ifdef _WIN32
+__try {
+#endif
 
    len_alloc = 128000;
 
@@ -2195,12 +2633,37 @@ DBXVAL * mg_extend_response_memory(MGWEB *pweb)
    pweb->poutput_val_last = pval;
 
    return pval;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_extend_response_memory: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return NULL;
+}
+#endif
 }
 
 
 int mg_release_request_memory(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    DBXVAL *pval, *pvalnext;
+
+#ifdef _WIN32
+__try {
+#endif
 
    if (!pweb) {
       return 0;
@@ -2219,13 +2682,38 @@ int mg_release_request_memory(MGWEB *pweb)
    mg_free(pweb->pweb_server, pweb, 0);
 
    return 0;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_release_request_memory: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return 0;
+}
+#endif
 }
 
-
+/* v2.4.24 */
 int mg_find_sa_variable(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    int rc, n, nb, server_no, len, name_len;
    char *p;
+
+#ifdef _WIN32
+__try {
+#endif
 
    server_no = -1;
 
@@ -2244,20 +2732,24 @@ int mg_find_sa_variable(MGWEB *pweb)
 }
 */
 
+   DBX_TRACE(1)
    for (n = 0; pweb->ppath->sa_variables[n]; n ++) {
       name_len = (int) strlen(pweb->ppath->sa_variables[n]);
       if (pweb->query_string && pweb->query_string_len) {
+         DBX_TRACE(2)
          server_no = mg_find_sa_variable_ex(pweb, pweb->ppath->sa_variables[n], name_len, (unsigned char *) pweb->query_string, pweb->query_string_len);
          if (server_no != -1) {
             break;
          }
       }
       if (pweb->request_content && pweb->request_clen) {
+         DBX_TRACE(10)
          rc = MG_CGI_SUCCESS;
          if (!pweb->request_content_type[0]) {
             len = 1020;
+            DBX_TRACE(11)
             rc = mg_get_cgi_variable(pweb, "CONTENT_TYPE", pweb->request_content_type, &len);
-
+            DBX_TRACE(12)
             if (rc == MG_CGI_SUCCESS) { /* v2.1.15 */
                p = strstr(pweb->request_content_type, "boundary=");
                if (p) {
@@ -2279,14 +2771,17 @@ int mg_find_sa_variable(MGWEB *pweb)
             }
          }
 
+         DBX_TRACE(13)
          if (rc == MG_CGI_SUCCESS) {
             if (strstr(pweb->request_content_type, "application/x-www-form-urlencoded")) {
+               DBX_TRACE(20)
                server_no = mg_find_sa_variable_ex(pweb, pweb->ppath->sa_variables[n], name_len, (unsigned char *) pweb->request_content, pweb->request_clen);
                if (server_no != -1) {
                   break;
                }
             }
             else if (pweb->boundary[0]) { /* v2.1.15 */
+               DBX_TRACE(30)
                server_no = mg_find_sa_variable_ex_mp(pweb, pweb->ppath->sa_variables[n], name_len, (unsigned char *) pweb->request_content, pweb->request_clen);
                if (server_no != -1) {
                   break;
@@ -2296,20 +2791,46 @@ int mg_find_sa_variable(MGWEB *pweb)
       }
    }
 
+   DBX_TRACE(40)
    if (server_no != -1) {
       pweb->server_no = server_no;
    }
 
    return server_no;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_find_sa_variable: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return -1;
+}
+#endif
 }
 
-
+/* v2.4.24 */
 int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char *nvpairs, int nvpairs_len)
 {
+   DBX_TRACE_INIT(0)
    int server_no, server_no0, n, len, found;
    unsigned char cnvz;
    char *pn, *pv, *pz;
    char sname[64];
+
+#ifdef _WIN32
+__try {
+#endif
 
    cnvz = nvpairs[nvpairs_len];
    nvpairs[nvpairs_len] = '\0';
@@ -2317,8 +2838,10 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
 
    *sname = '\0'; 
    found = 0;
+   DBX_TRACE(1)
    pn = strstr((char *) nvpairs, name);
    while (pn) {
+      DBX_TRACE(2)
       if (pn == (char *) nvpairs || *(pn - 1) == '&') {
          if (*(pn + name_len) == '=') {
             pv = pn + name_len + 1;
@@ -2330,6 +2853,7 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
             found = 1;
 
             if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
+               DBX_TRACE(3)
                server_no0 = (int) strtol(pv, NULL, 10);
                if (server_no0 < 32 && pweb->ppath->servers[server_no0].name) { /* v2.3.23 */
                   server_no = server_no0;
@@ -2338,9 +2862,11 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
             }
             else if (len < 60) { /* v2.1.17 */
                /* v2.1.17 */
+               DBX_TRACE(10)
                strcpy(sname, pv);
                mg_lcase(sname);
                for (n = 0; pweb->ppath->servers[n].name; n ++) {
+                  DBX_TRACE(11)
                   if (!strcmp(pweb->ppath->servers[n].lcname, sname)) {
                      server_no = n;
                      break;
@@ -2356,15 +2882,18 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
       if (server_no != -1) {
          break;
       }
+      DBX_TRACE(12)
       pn = strstr(pn + name_len, name);
    }
 
+   DBX_TRACE(20)
    nvpairs[nvpairs_len] = cnvz;
 
    if (pweb->plog->log_verbose) { /* v2.3.23 */
       int len;
       char bufferx[256];
 
+      DBX_TRACE(50)
       len = nvpairs_len;
       if (nvpairs_len > 511) {
          len = 511;
@@ -2385,29 +2914,61 @@ int mg_find_sa_variable_ex(MGWEB *pweb, char *name, int name_len, unsigned char 
       }
    }
 
+   DBX_TRACE(100)
    return server_no;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_find_sa_variable_ex: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return -1;
+}
+#endif
 }
 
 
-/* v2.1.15 */
+/* v2.1.15 v2.4.24 */
 int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned char *content, int content_len)
 {
+   DBX_TRACE_INIT(0)
    int server_no, server_no0, n, nc, nn, blen, len, found;
    char *ph, *phz, *pn, *pv, *pz;
    char cname[64], sname[64];
+
+#ifdef _WIN32
+__try {
+#endif
+
 /*
    mg_log_buffer(pweb->plog, pweb, (char *) content, content_len, "Multipart Payload", 0);
 */
    *sname = '\0';
    found = 0;
    server_no = -1;
+   DBX_TRACE(1)
    blen = (int) strlen(pweb->boundary);
    for (nc = 0; nc < (content_len - 3); nc ++) {
+      DBX_TRACE(2)
       if (content[nc] == '-' && content[nc + 1] == '-') {
+         DBX_TRACE(3)
          if (!strncmp((char *) (content + (nc + 2)), pweb->boundary, blen)) {
+            DBX_TRACE(4)
             ph = (char *) (content + (nc + blen + 4)); /* section header starts here */
             phz = strstr(ph, "\r\n\r\n"); /* section header ends here */
             if (phz) {
+               DBX_TRACE(5)
                *phz = '\0';
                pv = (phz + 4); /* section value starts here */
                pz = strstr(pv, "\r\n"); /* section value ends here */
@@ -2437,10 +2998,12 @@ int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned ch
                         mg_log_event(pweb->plog, pweb, (char *) pv, bufferx, 0);
                      }
 */
+                     DBX_TRACE(6)
                      if (!strcmp(name, cname)) {
                         found = 1;
                         len = (int) strlen(pv);
                         if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
+                           DBX_TRACE(10)
                            server_no0 = (int) strtol(pv, NULL, 10);
                            if (server_no0 < 32 && pweb->ppath->servers[server_no0].name) { /* v2.3.23 */
                               server_no = server_no0;
@@ -2448,6 +3011,7 @@ int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned ch
                            }
                         }
                         else if (len < 60) { /* v2.1.17 */
+                           DBX_TRACE(20)
                            strcpy(sname, pv);
                            mg_lcase(sname);
                            for (n = 0; pweb->ppath->servers[n].name; n ++) {
@@ -2484,11 +3048,12 @@ int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned ch
       }
    }
 */
-
+   DBX_TRACE(30)
    if (pweb->plog->log_verbose) { /* v2.3.23 */
       int len;
       char bufferx[256];
 
+      DBX_TRACE(50)
       len = content_len;
       if (content_len > 511) {
          len = 511;
@@ -2509,15 +3074,41 @@ int mg_find_sa_variable_ex_mp(MGWEB *pweb, char *name, int name_len, unsigned ch
       }
    }
 
+   DBX_TRACE(100)
    return server_no;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_find_sa_variable_ex_mp: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return -1;
+}
+#endif
 }
 
-
+/* v2.4.24 */
 int mg_find_sa_cookie(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    int server_no, server_no0, n, rc, len, name_len, found;
    char *pn, *pv, *pz;
    char sname[64];
+
+#ifdef _WIN32
+__try {
+#endif
 
    server_no = -1;
 
@@ -2527,13 +3118,17 @@ int mg_find_sa_cookie(MGWEB *pweb)
    found = 0;
    len = 4096;
    pweb->request_cookie = (char *) mg_malloc(NULL, len + 32, 0);
+   DBX_TRACE(1)
    if (!pweb->request_cookie) {
       return server_no;
    }
    for (n = 0; n < 3; n ++) {
+      DBX_TRACE(2)
       rc = mg_get_cgi_variable(pweb, "HTTP_COOKIE", pweb->request_cookie, &len);
 
+      DBX_TRACE(3)
       if (rc == MG_CGI_TOOLONG) {
+         DBX_TRACE(4)
          mg_free(NULL, (void *) pweb->request_cookie, 0);
          len = (n + 2) * 4096;
          pweb->request_cookie = (char *) mg_malloc(NULL, len + 32, 0);
@@ -2548,10 +3143,14 @@ int mg_find_sa_cookie(MGWEB *pweb)
       return server_no;
    }
 
+   DBX_TRACE(5)
    pn = strstr(pweb->request_cookie, pweb->ppath->sa_cookie);
    while (pn) {
+      DBX_TRACE(10)
       if (pn == pweb->request_cookie || *(pn - 1) == ';' || *(pn - 1) == ' ') {
+         DBX_TRACE(11)
          if (*(pn + name_len) == '=') {
+            DBX_TRACE(12)
             pv = pn + name_len + 1;
             pz = strstr(pv, ";");
             if (pz) {
@@ -2561,6 +3160,7 @@ int mg_find_sa_cookie(MGWEB *pweb)
             found = 1;
             len = (int) strlen(pv);
             if (((int) *pv) >= 48 && ((int) *pv) <= 57) {
+               DBX_TRACE(20)
                server_no0 = (int) strtol(pv, NULL, 10);
                if (server_no0 < 32 && pweb->ppath->servers[server_no0].name) { /* v2.3.23 */
                   server_no = server_no0;
@@ -2568,6 +3168,7 @@ int mg_find_sa_cookie(MGWEB *pweb)
                }
             }
             else if (len < 60) { /* v2.3.23 */
+               DBX_TRACE(30)
                strcpy(sname, pv);
                mg_lcase(sname);
                for (n = 0; pweb->ppath->servers[n].name; n ++) {
@@ -2586,6 +3187,7 @@ int mg_find_sa_cookie(MGWEB *pweb)
       if (server_no != -1) {
          break;
       }
+      DBX_TRACE(40)
       pn = strstr(pn + name_len, pweb->ppath->sa_cookie);
    }
 
@@ -2606,6 +3208,7 @@ int mg_find_sa_cookie(MGWEB *pweb)
    if (pweb->plog->log_verbose) { /* v2.3.23 */
       char bufferx[256];
 
+      DBX_TRACE(50)
       if (found) {
          if (server_no != -1) {
             sprintf(bufferx, "mg_web:mg_find_sa_cookie: Server Affinity Cookie '%s' found; Server number to use: %d (%s)", pweb->ppath->sa_cookie, server_no, sname);
@@ -2622,12 +3225,34 @@ int mg_find_sa_cookie(MGWEB *pweb)
       }
    }
 
+   DBX_TRACE(100)
    return server_no;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_find_sa_cookie: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return -1;
+}
+#endif
 }
 
 
 int mg_worker_init()
 {
+   DBX_TRACE_INIT(0)
 #if defined(_WIN32)
    int n;
 #endif
@@ -2775,11 +3400,11 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(bufferx, 255, "Exception caught in f:mg_worker_init: %x", code);
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_worker_init: %x:%d", code, DBX_TRACE_VAR);
       strcpy(mg_system.config_error, bufferx);
       mg_log_event(&(mg_system.log), NULL, bufferx, "Error Condition", 0);
    }
-   __except (EXCEPTION_EXECUTE_HANDLER ) {
+   __except (EXCEPTION_EXECUTE_HANDLER) {
       ;
    }
 
@@ -2792,8 +3417,13 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 int mg_worker_exit()
 {
+   DBX_TRACE_INIT(0)
    int rc;
    char title[128], buffer[128];
+
+#ifdef _WIN32
+__try {
+#endif
 
    rc = CACHE_SUCCESS;
    strcpy(title, "mg_web: web server worker closing");
@@ -2819,11 +3449,32 @@ int mg_worker_exit()
    mg_delete_critical_section((void *) &mg_global_mutex);
 
    return 0;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_worker_exit: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(&(mg_system.log), NULL, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return 0;
+}
+#endif
 }
 
 
 int mg_parse_config()
 {
+   DBX_TRACE_INIT(0)
    int wn, vn, ln, n, len, lenx, line_len, size, inserver, inpath, intls, incgi, inenv, eos, ex;
    char *pa, *pz, *peol, *p, *pprop;
    char *word[256];
@@ -2983,6 +3634,7 @@ __try {
                      ppath->servers[n].psrv = NULL;
                      ppath->servers[n].exclusive = 0;
                   }
+                  ppath->admin = 0;
                   ppath->load_balancing = 0;
                   ppath->sa_cookie = NULL;
                   ppath->sa_order = 0;
@@ -3191,6 +3843,13 @@ __try {
                         }
                      }
                   }
+                  else if (!strcmp(word[0], "administrator")) { /* v2.4.24 */
+                     ppath->admin = 1;
+                     mg_lcase(word[1]);
+                     if (!strcmp(word[1], "on")) {
+                        ppath->admin = 2;
+                     }
+                  }
                   else {
                      sprintf(mg_system.config_error, "Invalid 'location' parameter '%s' on line %d", word[0], ln); 
                   }
@@ -3288,20 +3947,7 @@ __try {
                   }
                   else if (!strcmp(word[0], "log_level")) {
                      for (n = 1; n < wn; n ++) {
-                        if (strstr(word[n], "e") || strstr(word[n], "E"))
-                           mg_system.log.log_errors = 1;
-                        if (strstr(word[n], "v") || strstr(word[n], "V"))
-                           mg_system.log.log_verbose = 1;
-                        if (strstr(word[n], "f") || strstr(word[n], "F"))
-                           mg_system.log.log_frames = 1;
-                        if (strstr(word[n], "t") || strstr(word[n], "T"))
-                           mg_system.log.log_transmissions = 1;
-                        if (strstr(word[n], "w") || strstr(word[n], "W"))
-                           mg_system.log.log_transmissions_to_webserver = 1;
-                        if (strstr(word[n], "s")) /* v2.3.21 */
-                           mg_system.log.log_tls = 1;
-                        if (strstr(word[n], "S"))
-                           mg_system.log.log_tls = 2;
+                        mg_set_log_level(&(mg_system.log), word[n], n);
                      }
                   }
                   else if (!strcmp(word[0], "chunking")) { /* 2.0.8 */
@@ -3372,11 +4018,11 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(bufferx, 255, "Exception caught in f:mg_parse_config: %x", code);
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_parse_config: %x:%d", code, DBX_TRACE_VAR);
       strcpy(mg_system.config_error, bufferx);
       mg_log_event(&(mg_system.log), NULL, bufferx, "Error Condition", 0);
    }
-   __except (EXCEPTION_EXECUTE_HANDLER ) {
+   __except (EXCEPTION_EXECUTE_HANDLER) {
       ;
    }
 
@@ -3386,8 +4032,38 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
+int mg_set_log_level(DBXLOG *plog, char *word, int wn)
+{
+   if (wn < 2) {
+      plog->log_errors = 0;
+      plog->log_verbose = 0;
+      plog->log_frames = 0;
+      plog->log_transmissions = 0;
+      plog->log_transmissions_to_webserver = 0;
+      plog->log_tls = 0;
+   }
+   if (strstr(word, "e") || strstr(word, "E"))
+      plog->log_errors = 1;
+   if (strstr(word, "v") || strstr(word, "V"))
+      plog->log_verbose = 1;
+   if (strstr(word, "f") || strstr(word, "F"))
+      plog->log_frames = 1;
+   if (strstr(word, "t") || strstr(word, "T"))
+      plog->log_transmissions = 1;
+   if (strstr(word, "w") || strstr(word, "W"))
+      plog->log_transmissions_to_webserver = 1;
+   if (strstr(word, "s")) /* v2.3.21 */
+      plog->log_tls = 1;
+   if (strstr(word, "S"))
+      plog->log_tls = 2;
+
+   return CACHE_SUCCESS;
+}
+
+
 int mg_verify_config()
 {
+   DBX_TRACE_INIT(0)
    int n;
    char *pbuf;
    char buffer[256];
@@ -3512,64 +4188,71 @@ __try {
    }
 
    while (ppath) {
-      if (!ppath->function) {
-         sprintf(mg_system.config_error, "Missing database function from Location '%s'", ppath->name);
-         break;
-      }
-      if (!ppath->servers[0].name) {
-         sprintf(mg_system.config_error, "No DB Servers defined for Location '%s'", ppath->name);
-         break;
-      }
-      for (n = 0; ppath->servers[n].name; n ++) {
-         psrv = mg_server;
-         while (psrv) {
-            if (!strcmp(ppath->servers[n].name, psrv->name)) {
-               ppath->servers[n].psrv = psrv;
-               break;
-            }
-            psrv = psrv->pnext;
+      if (ppath->admin) {
+         if (pbuf) {
+            sprintf(pbuf, "location name=%s; path reserved for administrator functions", ppath->name);
+            mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: location", 0);
          }
-         if (!psrv) {
-            sprintf(mg_system.config_error, "DB Server configuration for '%s' not found for Location '%s'", ppath->servers[n].name, ppath->name);
+      }
+      else {
+         if (!ppath->function) {
+            sprintf(mg_system.config_error, "Missing database function from Location '%s'", ppath->name);
             break;
          }
-      }
-      if (mg_system.config_error[0]) {
-         break;
-      }
-      if (!ppath->servers[0].psrv || !ppath->servers[0].name) {
-         sprintf(mg_system.config_error, "No DB Servers found for Location '%s'", ppath->name);
-         break;
-      }
-
-      if (pbuf) {
-         sprintf(pbuf, "location name=%s; function=%s; load balancing=%d; SA precedence=%d; SA cookie=%s", ppath->name, ppath->function ? ppath->function : "null", ppath->load_balancing, ppath->sa_order, ppath->sa_cookie ? ppath->sa_cookie : "null");
-         if (ppath->sa_variables[0]) {
-            for (n = 0; ppath->sa_variables[n]; n ++) {
-               if (!n) {
-                  strcat(pbuf, "; SA variable=");
-                  strcat(pbuf, ppath->sa_variables[n]);
-               }
-               else {
-                  strcat(pbuf, " and ");
-                  strcat(pbuf, ppath->sa_variables[n]);
-               }
-            }
-         }
-         else {
-            strcat(pbuf, "; SA variable=null");
+         if (!ppath->servers[0].name) {
+            sprintf(mg_system.config_error, "No DB Servers defined for Location '%s'", ppath->name);
+            break;
          }
          for (n = 0; ppath->servers[n].name; n ++) {
-            sprintf(buffer, "; server %d=", n);
-            strcat(pbuf, buffer);
-            strcat(pbuf, ppath->servers[n].name);
-            if (ppath->servers[n].exclusive) {
-               strcat(pbuf, "(ex)");
+            psrv = mg_server;
+            while (psrv) {
+               if (!strcmp(ppath->servers[n].name, psrv->name)) {
+                  ppath->servers[n].psrv = psrv;
+                  break;
+               }
+               psrv = psrv->pnext;
+            }
+            if (!psrv) {
+               sprintf(mg_system.config_error, "DB Server configuration for '%s' not found for Location '%s'", ppath->servers[n].name, ppath->name);
+               break;
             }
          }
-         mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: location", 0);
-      }
+         if (mg_system.config_error[0]) {
+            break;
+         }
+         if (!ppath->servers[0].psrv || !ppath->servers[0].name) {
+            sprintf(mg_system.config_error, "No DB Servers found for Location '%s'", ppath->name);
+            break;
+         }
 
+         if (pbuf) {
+            sprintf(pbuf, "location name=%s; function=%s; load balancing=%d; SA precedence=%d; SA cookie=%s", ppath->name, ppath->function ? ppath->function : "null", ppath->load_balancing, ppath->sa_order, ppath->sa_cookie ? ppath->sa_cookie : "null");
+            if (ppath->sa_variables[0]) {
+               for (n = 0; ppath->sa_variables[n]; n ++) {
+                  if (!n) {
+                     strcat(pbuf, "; SA variable=");
+                     strcat(pbuf, ppath->sa_variables[n]);
+                  }
+                  else {
+                     strcat(pbuf, " and ");
+                     strcat(pbuf, ppath->sa_variables[n]);
+                  }
+               }
+            }
+            else {
+               strcat(pbuf, "; SA variable=null");
+            }
+            for (n = 0; ppath->servers[n].name; n ++) {
+               sprintf(buffer, "; server %d=", n);
+               strcat(pbuf, buffer);
+               strcat(pbuf, ppath->servers[n].name);
+               if (ppath->servers[n].exclusive) {
+                  strcat(pbuf, "(ex)");
+               }
+            }
+            mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: location", 0);
+         }
+      }
       ppath = ppath->pnext;
    }
 
@@ -3594,11 +4277,11 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(bufferx, 255, "Exception caught in f:mg_verify_config: %x", code);
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_verify_config: %x:%d", code, DBX_TRACE_VAR);
       strcpy(mg_system.config_error, bufferx);
       mg_log_event(&(mg_system.log), NULL, bufferx, "Error Condition", 0);
    }
-   __except (EXCEPTION_EXECUTE_HANDLER ) {
+   __except (EXCEPTION_EXECUTE_HANDLER) {
       ;
    }
 
@@ -5731,7 +6414,7 @@ __try {
 
 #ifdef _WIN32
 }
-__except (EXCEPTION_EXECUTE_HANDLER ) {
+__except (EXCEPTION_EXECUTE_HANDLER) {
       return 0;
 }
 
@@ -5796,7 +6479,7 @@ __try {
 
 #ifdef _WIN32
 }
-__except (EXCEPTION_EXECUTE_HANDLER ) {
+__except (EXCEPTION_EXECUTE_HANDLER) {
       return 0;
 }
 
@@ -6934,7 +7617,7 @@ int netx_tcp_connect(MGWEB *pweb, int context)
 
 int netx_tcp_handshake(MGWEB *pweb, int context)
 {
-   int len;
+   int len, len1;
    char buffer[256];
    DBXCON *pcon;
 
@@ -6946,6 +7629,9 @@ int netx_tcp_handshake(MGWEB *pweb, int context)
    netx_tcp_write(pweb, (unsigned char *) buffer, len);
 
    len = netx_tcp_read(pweb, (unsigned char *) buffer, 5, 10, 1); /* v2.1.13 */
+   if (len != 5) {
+      return CACHE_NOCON;
+   }
 
    len = mg_get_size((unsigned char *) buffer);
 /*
@@ -6955,7 +7641,10 @@ int netx_tcp_handshake(MGWEB *pweb, int context)
       mg_log_event(pweb->plog, pweb, bufferx, "netx_tcp_handshake", -1);
    }
 */
-   netx_tcp_read(pweb, (unsigned char *) buffer, len, 10, 1); /* v2.1.13 */
+   len1 = netx_tcp_read(pweb, (unsigned char *) buffer, len, 10, 1); /* v2.1.13 */
+   if (len1 != len) {
+      return CACHE_NOCON;
+   }
 
    if (pcon->psrv->dbtype != DBX_DBTYPE_YOTTADB) {
       isc_parse_zv(buffer, pcon->p_zv);
@@ -7036,10 +7725,15 @@ dbx1 ; test
 
 int netx_tcp_command(MGWEB *pweb, int command, int context)
 {
+   DBX_TRACE_INIT(0)
    int get, rc, offset, reconnect;
    unsigned int netbuf_used;
    unsigned char *netbuf;
    DBXCON *pcon;
+
+#ifdef _WIN32
+__try {
+#endif
 
    pcon = pweb->pcon;
 
@@ -7203,14 +7897,40 @@ netx_tcp_command_reconnect:
       rc = CACHE_SUCCESS;
    }
    return rc;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:netx_tcp_command: %x:%d", code, DBX_TRACE_VAR);
+      strcpy(mg_system.config_error, bufferx);
+      mg_log_event(&(mg_system.log), NULL, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return CACHE_FAILURE;
+}
+#endif
 }
 
 
 int netx_tcp_read_stream(MGWEB *pweb)
 {
+   DBX_TRACE_INIT(0)
    int rc, get, eos;
    DBXVAL *pval;
    DBXCON *pcon;
+
+#ifdef _WIN32
+__try {
+#endif
 
    pcon = pweb->pcon;
 
@@ -7384,6 +8104,27 @@ int netx_tcp_read_stream(MGWEB *pweb)
       }
    }
    return rc;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:netx_tcp_read_stream: %x:%d", code, DBX_TRACE_VAR);
+      strcpy(mg_system.config_error, bufferx);
+      mg_log_event(&(mg_system.log), NULL, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return CACHE_FAILURE;
+}
+#endif
 }
 
 

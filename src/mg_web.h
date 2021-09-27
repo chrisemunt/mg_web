@@ -358,6 +358,16 @@ typedef int    xc_status_t;
 #define DBX_MEMCPY(a,b,c)           memcpy(a,b,c)
 #endif
 
+/* v2.4.24 */
+#if defined(_WIN32)
+#define DBX_TRACE_INIT(a)           short dbx_trace = a;
+#define DBX_TRACE(a)                dbx_trace = a;
+#define DBX_TRACE_VAR               dbx_trace
+#else
+#define DBX_TRACE_INIT(a)
+#define DBX_TRACE(a)
+#define DBX_TRACE_VAR               0
+#endif
 
 #define DBX_LOCK(TIMEOUT) \
    if (pcon->use_db_mutex) { \
@@ -1060,6 +1070,7 @@ typedef struct tagMGTLS {
 typedef struct tagMGSRV {
    short             dbtype;
    short             offline;
+   unsigned long     no_requests;
    time_t            time_offline; /* v2.2.20 */
    int               health_check;  /* v2.2.20 */
    char              *name;
@@ -1109,6 +1120,7 @@ typedef struct tagMGPATH {
 */
    MGPSRV      servers[32]; /* v2.1.16 */
    char        *cgi[128];
+   int         admin; /* v2.4.24 */
    struct tagMGPATH  *pnext;
 } MGPATH, *LPMGPATH;
 
@@ -1117,6 +1129,7 @@ typedef struct tagDBXCON {
    int               alloc;
    int               inuse;
    int               argc;
+   unsigned long     no_requests;
    unsigned long     pid;
    short             use_db_mutex;
    DBXMUTEX          *p_db_mutex;
@@ -1240,6 +1253,7 @@ typedef struct tagMGWEB {
    int            http_version_major;
    int            http_version_minor;
    int            wserver_chunks_response;
+   int            mg_connect_called;
    int            failover_possible;
    int            request_long; /* v2.2.18 */
    int            request_clen;
@@ -1313,6 +1327,9 @@ extern pthread_mutex_t   mg_global_mutex;
 #endif
 
 extern MGSYS         mg_system;
+extern DBXCON *      mg_connection;
+extern MGSRV *       mg_server;
+extern MGPATH *      mg_path;
 
 extern MG_MALLOC     mg_ext_malloc;
 extern MG_REALLOC    mg_ext_realloc;
@@ -1353,13 +1370,14 @@ int                     mg_write_chunk_tcp            (MGWEB *pweb, unsigned cha
 int                     mg_write_chunk_isc            (MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no);
 int                     mg_write_chunk_ydb            (MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no);
 int                     mg_web_http_error             (MGWEB *pweb, int http_status_code, int custompage);
+int                     mg_web_simple_response        (MGWEB *pweb, char *text, char *error, int context);
 int                     mg_get_all_cgi_variables      (MGWEB *pweb);
 int                     mg_get_path_configuration     (MGWEB *pweb);
 int                     mg_add_cgi_variable           (MGWEB *pweb, char *name, int name_len, char *value, int value_len);
 int                     mg_obtain_connection          (MGWEB *pweb);
-int                     mg_obtain_server              (MGWEB *pweb, int context);
-int                     mg_server_offline             (MGWEB *pweb, MGSRV *psrv, int context);
-int                     mg_server_online              (MGWEB *pweb, MGSRV *psrv, int context);
+int                     mg_obtain_server              (MGWEB *pweb, char *info, int context);
+int                     mg_server_offline             (MGWEB *pweb, MGSRV *psrv, char *info, int context);
+int                     mg_server_online              (MGWEB *pweb, MGSRV *psrv, char *info, int context);
 int                     mg_connect                    (MGWEB *pweb, int context);
 int                     mg_release_connection         (MGWEB *pweb, int close_connection);
 MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen);
@@ -1372,6 +1390,7 @@ int                     mg_find_sa_cookie             (MGWEB *pweb);
 int                     mg_worker_init                ();
 int                     mg_worker_exit                ();
 int                     mg_parse_config               ();
+int                     mg_set_log_level              (DBXLOG *plog, char *word, int wn);
 int                     mg_verify_config              ();
 
 int                     isc_load_library              (MGWEB *pweb);
