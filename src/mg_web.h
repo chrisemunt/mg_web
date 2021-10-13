@@ -1073,6 +1073,8 @@ typedef struct tagMGSRV {
    unsigned long     no_requests;
    time_t            time_offline; /* v2.2.20 */
    int               health_check;  /* v2.2.20 */
+   int               con_retry_time; /* v2.4.25 */
+   int               con_retry_no;
    char              *name;
    char              lcname[64]; /* v2.1.17 */
    int               name_len;
@@ -1253,7 +1255,7 @@ typedef struct tagMGWEB {
    int            http_version_major;
    int            http_version_minor;
    int            wserver_chunks_response;
-   int            mg_connect_called;
+   int            mg_connect_failed;
    int            failover_possible;
    int            request_long; /* v2.2.18 */
    int            request_clen;

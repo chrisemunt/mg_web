@@ -455,10 +455,10 @@ __try {
          mg_status_add(pweb, padm, buffer, 0, 0);
 
          if (psrv->net_connection) {
-            sprintf(buffer, "      \"host\": \"%s:%d\",\r\n      \"nagle_algorithm\": \"%s\",\r\n      \"tls\": \"%s\",\r\n      \"namespace\": \"%s\",\r\n      \"health_check\": %d\r\n   }", psrv->ip_address ? psrv->ip_address : "", psrv->port, psrv->nagle_algorithm ? "on" : "off", psrv->tls_name ? psrv->tls_name : "", psrv->uci ? psrv->uci : "", psrv->health_check);
+            sprintf(buffer, "      \"host\": \"%s:%d\",\r\n      \"nagle_algorithm\": \"%s\",\r\n      \"tls\": \"%s\",\r\n      \"namespace\": \"%s\",\r\n      \"health_check\": %d,\r\n      \"connection_retries\": \"%d/%d\"\r\n   }", psrv->ip_address ? psrv->ip_address : "", psrv->port, psrv->nagle_algorithm ? "on" : "off", psrv->tls_name ? psrv->tls_name : "", psrv->uci ? psrv->uci : "", psrv->health_check, psrv->con_retry_no, psrv->con_retry_time);
          }
          else {
-            sprintf(buffer, "      \"path\": \"%s\",\r\n      \"namespace\": \"%s\",\r\n      \"health_check\": %d\r\n   }", psrv->shdir ? psrv->shdir : "", psrv->uci ? psrv->uci : "", psrv->health_check);
+            sprintf(buffer, "      \"path\": \"%s\",\r\n      \"namespace\": \"%s\",\r\n      \"health_check\": %d,\r\n      \"connection_retries\": \"%d/%d\"\r\n   }", psrv->shdir ? psrv->shdir : "", psrv->uci ? psrv->uci : "", psrv->health_check, psrv->con_retry_no, psrv->con_retry_time);
          }
          mg_status_add(pweb, padm, buffer, 0, 0);
       }
@@ -470,10 +470,10 @@ __try {
          mg_status_add(pweb, padm, buffer, 0, 0);
 
          if (psrv->net_connection) {
-            sprintf(buffer, "   Host: %s:%d\r\n   Nagle-Algorithm: %s\r\n   TLS: %s\r\n   Namespace: %s\r\n   Health-Check: %d\r\n", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->nagle_algorithm ? "on" : "off", psrv->tls_name ? psrv->tls_name : "null", psrv->uci ? psrv->uci : "null", psrv->health_check);
+            sprintf(buffer, "   Host: %s:%d\r\n   Nagle-Algorithm: %s\r\n   TLS: %s\r\n   Namespace: %s\r\n   Health-Check: %d\r\n   Connection-Retries: %d/%d\r\n", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->nagle_algorithm ? "on" : "off", psrv->tls_name ? psrv->tls_name : "null", psrv->uci ? psrv->uci : "null", psrv->health_check, psrv->con_retry_no, psrv->con_retry_time);
          }
          else {
-            sprintf(buffer, "   Path: %s\r\n   Namespace: %s\r\n   Health-Check: %d\r\n", psrv->shdir ? psrv->shdir : "null", psrv->uci ? psrv->uci : "null", psrv->health_check);
+            sprintf(buffer, "   Path: %s\r\n   Namespace: %s\r\n   Health-Check: %d\r\n   Connection-Retries: %d/%d\r\n", psrv->shdir ? psrv->shdir : "null", psrv->uci ? psrv->uci : "null", psrv->health_check, psrv->con_retry_no, psrv->con_retry_time);
          }
          mg_status_add(pweb, padm, buffer, 0, 0);
       }

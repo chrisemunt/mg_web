@@ -130,6 +130,9 @@ Version 2.4.24 27 September 2021:
    Introduce Administrator Facilities.  Implemented as REST requests.
    Improve the granularity of error reporting.
 
+Version 2.4.25 13 October 2021:
+   Introduce a DB Server configuration parameter (connection_retries) to control the number of attempts (and the total time spent) in connecting to a DB Server before marking it offline.
+	   connection_retries number_of_connection_retries/total_time_allowed
 */
 
 
@@ -465,7 +468,7 @@ __try {
 
 mg_web_process_failover:
 
-   pweb->mg_connect_called = 0;
+   pweb->mg_connect_failed = 0;
    DBX_TRACE(6)
    rc = mg_obtain_connection(pweb);
 
@@ -490,7 +493,7 @@ mg_web_process_failover:
       }
       mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
 
-      if (pweb->mg_connect_called) { /* v2.4.24 only mark a server offline on account of a new connection failure */
+      if (pweb->mg_connect_failed) { /* v2.4.24 only mark a server offline on account of a new connection failure */
          mg_server_offline(pweb, pweb->psrv, info, 0);
          if (info[0]) {
             mg_log_event(pweb->plog, pweb, info, "mg_web: connectivity", 0);
@@ -639,7 +642,7 @@ mg_web_process_failover:
    else { /* v2.1.13 */
       DBX_TRACE(42)
 
-      if (pweb->mg_connect_called) { /* v2.4.24 only mark a server offline on account of a new connection failure */
+      if (pweb->mg_connect_failed) { /* v2.4.24 only mark a server offline on account of a new connection failure */
          mg_server_offline(pweb, pweb->psrv, info, 1);
          if (info[0]) {
             mg_log_event(pweb->plog, pweb, info, "mg_web: connectivity", 0);
@@ -2323,27 +2326,80 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 int mg_connect(MGWEB *pweb, int context)
 {
    DBX_TRACE_INIT(0)
-   int rc;
+   int rc, con_retry_no, con_retry_time;
+   char bufferx[256];
    DBXCON *pcon;
+   time_t time_start, time_now;
 
 #ifdef _WIN32
 __try {
 #endif
 
-   pweb->mg_connect_called ++;
+   /* v2.4.25 */
+   time_start = time(NULL);
+   con_retry_no = 0;
+   con_retry_time = 0;
+   pweb->mg_connect_failed = 0;
    pcon = pweb->pcon;
 
    rc = CACHE_SUCCESS;
    if (!pcon->psrv->shdir && pcon->psrv->ip_address && pcon->psrv->port) {
-      rc = netx_tcp_connect(pweb, 0);
+
+      while (1) {
+         rc = netx_tcp_connect(pweb, 0);
 /*
-      {
-         char buffer[256];
-         sprintf(buffer, "network rc=%d;", rc);
-         mg_log_event(pweb->plog, pweb, buffer, "mg_obtain_connection: New Connection", 0);
-      }
+         {
+            char buffer[256];
+            sprintf(buffer, "network rc=%d;", rc);
+            mg_log_event(pweb->plog, pweb, buffer, "mg_connect: New Connection", 0);
+         }
 */
+         if (rc == CACHE_SUCCESS) {
+            rc = netx_tcp_handshake(pweb, 0);
+/*
+            {
+               char buffer[256];
+               sprintf(buffer, "network handshake rc=%d;", rc);
+               mg_log_event(pweb->plog, pweb, buffer, "mg_connect: New Connection", 0);
+            }
+*/
+            if (rc == CACHE_SUCCESS) {
+               break;
+            }
+         }
+         /* see if we can retry connecting */
+         con_retry_no ++;
+         if (pcon->psrv->con_retry_no > 0 && con_retry_no > pcon->psrv->con_retry_no) {
+            con_retry_no = pcon->psrv->con_retry_no;
+            sprintf(bufferx, "Cannot connect to DB Server %s after %d %s", pcon->psrv->name, con_retry_no, con_retry_no == 1 ? "attempt" : "attempts");
+            mg_log_event(pweb->plog, pweb, bufferx, "mg_connect: new connection attempt", 0);
+            break;
+         }
+         else if (pcon->psrv->con_retry_time > 0) {
+            time_now = time(NULL);
+            con_retry_time = (int) difftime(time_now, time_start);
+            if (con_retry_time > pcon->psrv->con_retry_time) {
+               sprintf(bufferx, "Cannot connect to DB Server %s after %d seconds", pcon->psrv->name, con_retry_time);
+               mg_log_event(pweb->plog, pweb, bufferx, "mg_connect: new connection attempt", 0);
+               break;
+            }
+         }
+         else {
+            sprintf(bufferx, "Cannot connect to DB Server %s after %d %s", pcon->psrv->name, con_retry_no, con_retry_no == 1 ? "attempt" : "attempts");
+            mg_log_event(pweb->plog, pweb, bufferx, "mg_connect: new connection attempt", 0);
+            break;
+         }
+         /* backoff slightly after each retry */
+         if (con_retry_no < 5) {
+            mg_sleep((unsigned long) con_retry_no * 1000);
+         }
+         else {
+            mg_sleep((unsigned long) 5000);
+         }
+      }
+
       if (rc != CACHE_SUCCESS) {
+         pweb->mg_connect_failed = 1;
          pcon->alloc = 0;
          pcon->closed = 1;
          rc = CACHE_NOCON;
@@ -2351,23 +2407,6 @@ __try {
          return rc;
       }
  
-      rc = netx_tcp_handshake(pweb, 0);
-/*
-      {
-         char buffer[256];
-         sprintf(buffer, "network handshake rc=%d;", rc);
-         mg_log_event(pweb->plog, pweb, buffer, "mg_obtain_connection: New Connection", 0);
-      }
-*/
-
-      if (rc != CACHE_SUCCESS) {
-         pcon->alloc = 0;
-         pcon->closed = 1;
-         rc = CACHE_NOCON;
-         mg_error_message(pweb, rc);
-         return rc;
-      }
-
       pcon->alloc = 1;
       pcon->net_connection = 1; /* network connection */
       return rc;
@@ -2404,10 +2443,13 @@ __try {
    }
    DBX_UNLOCK();
 
-   if (pcon->alloc)
+   if (pcon->alloc) {
       return CACHE_SUCCESS;
-   else
+   }
+   else {
+      pweb->mg_connect_failed = 1;
       return CACHE_NOCON;
+   }
 
 #ifdef _WIN32
 }
@@ -3595,6 +3637,9 @@ __try {
                   /* v2.2.20 */
                   psrv->time_offline = 0;
                   psrv->health_check = 0;
+                  /* v2.4.25 */
+                  psrv->con_retry_no = 0;
+                  psrv->con_retry_time = 0;
                   psrv->ptls = NULL; /* v2.3.21 */
                   if (psrv_prev) {
                      psrv_prev->pnext = psrv;
@@ -3747,6 +3792,13 @@ __try {
                   }
                   else if (!strcmp(word[0], "health_check")) { /* v2.2.20 */
                      psrv->health_check = (int) strtol(word[1], NULL, 10);
+                  }
+                  else if (!strcmp(word[0], "connection_retries")) { /* v2.4.25 */
+                     psrv->con_retry_no = (int) strtol(word[1], NULL, 10);
+                     p = strstr(word[1], "/");
+                     if (p) {
+                        psrv->con_retry_time = (int) strtol(++ p, NULL, 10);
+                     }
                   }
                   else if (!strcmp(word[0], "tls")) { /* v2.3.21 */
                      psrv->tls_name = word[1];
@@ -4170,8 +4222,8 @@ __try {
          mg_buf_cat(psrv->penv, "\n", 1);
       }
 
-      if (pbuf) {
-         sprintf(pbuf, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s; tls=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null", psrv->tls_name ? psrv->tls_name : "null");
+      if (pbuf) { /* v2.4.25 */
+         sprintf(pbuf, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s; health_check=%d; connection_retries=%d/%d; tls=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null", psrv->health_check, psrv->con_retry_no, psrv->con_retry_time, psrv->tls_name ? psrv->tls_name : "null");
          mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: DB Server", 0);
          if (psrv->penv) {
             sprintf(pbuf, "mg_web: configuration: DB Server: environment variables for DB Server name=%s;", psrv->name);
