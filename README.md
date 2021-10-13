@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-27 September 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+13 October 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.4; Revision 24.
+* Current Release: Version: 2.4; Revision 25.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -249,3 +249,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 	* Marking individual servers online/offline.
 * Improve the granularity of error reporting.
 
+### v2.4.25 (13 October 2021)
+
+* Introduce a DB Server configuration parameter (**connection\_retries**) to control the number of attempts (and the total time spent) in connecting to a DB Server before marking it offline.
+	* connection\_retries number\_of\_connection\_retries/total\_time\_allowed
