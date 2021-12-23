@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-13 October 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+22 December 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.4; Revision 25.
+* Current Release: Version: 2.4; Revision 26.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -253,3 +253,11 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 * Introduce a DB Server configuration parameter (**connection\_retries**) to control the number of attempts (and the total time spent) in connecting to a DB Server before marking it offline.
 	* connection\_retries number\_of\_connection\_retries/total\_time\_allowed
+
+### v2.4.26 (22 December 2021)
+
+* Introduce a DB Server configuration parameter (**idle\_timeout**) to limit the amount of time that a network connection will remain in the pool without receiving any work.  This parameter should be included in **server** configuration blocks.
+	* idle\_timeout timeout\_in\_seconds
+	* Example: idle\_timeout 300 (close down network connections that have been idle for more than 5 minutes.
+	* This enhancement requires DB Superserver version 4.5; Revision 26 (or later).
+
