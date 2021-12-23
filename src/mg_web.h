@@ -1072,6 +1072,7 @@ typedef struct tagMGSRV {
    short             offline;
    unsigned long     no_requests;
    time_t            time_offline; /* v2.2.20 */
+   int               idle_timeout; /* v2.4.26 */
    int               health_check;  /* v2.2.20 */
    int               con_retry_time; /* v2.4.25 */
    int               con_retry_no;
@@ -1147,6 +1148,7 @@ typedef struct tagDBXCON {
    int               timeout;
    int               current_timeout;
    int               eof;
+   time_t            time_request; /* v2.4.26 */
    SOCKET            cli_socket;
    int               int_pipe[2];
    int               stream_tail_len;

@@ -113,6 +113,7 @@ Version 2.2.20 30 June 2021:
 
 Version 2.3.21 18 August 2021:
    Introduce support for TLS-secured connectivity between mg_web and InterSystems DB Servers.
+      This enhancement requires DB Superserver version 4.4; Revision 23 (or later).
 
 Version 2.3.22 25 August 2021:
    Support the renamed TLS libraries introduced with OpenSSL v1.1.
@@ -133,6 +134,12 @@ Version 2.4.24 27 September 2021:
 Version 2.4.25 13 October 2021:
    Introduce a DB Server configuration parameter (connection_retries) to control the number of attempts (and the total time spent) in connecting to a DB Server before marking it offline.
 	   connection_retries number_of_connection_retries/total_time_allowed
+
+Version 2.4.26 22 December 2021:
+   Introduce a DB Server configuration parameter (idle_timeout) to limit the amount of time that a network connection will remain in the pool without receiving any work.
+      idle_timeout timeout_in_seconds
+   This enhancement requires DB Superserver version 4.5; Revision 26 (or later).
+
 */
 
 
@@ -1833,12 +1840,13 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 int mg_obtain_connection(MGWEB *pweb)
 {
    DBX_TRACE_INIT(0)
-   int rc, use_existing;
+   int rc, use_existing, idle_time;
    DBXCON *pcon, *pcon_last, *pcon_free;
    char bufferx[256], info[256];
    MGSRV *psrv;
    MGPATH *ppath;
    char *p, *p1, *p2;
+   time_t time_now;
 
 #ifdef _WIN32
 __try {
@@ -1936,6 +1944,7 @@ __try {
             pcon->alloc = 1;
             pcon->inuse = 1;
             pcon->closed = 0;
+            pcon->time_request = 0; /* v2.4.26 */
             pcon->no_requests = 0;
             pcon->int_pipe[0] = 0;
             pcon->int_pipe[1] = 0;
@@ -1967,10 +1976,29 @@ __try {
    pweb->error_code = 0;
    pweb->error_no = 0;
 
+   /* v2.4.26 */
+   idle_time = 0;
+   time_now = time(NULL);
+   if (psrv->net_connection == 1 && pcon->time_request) { /* check connetion idle timeout for network connections */
+      idle_time = (int) difftime(time_now, pcon->time_request);
+      if (idle_time > (psrv->idle_timeout - 5)) {
+         use_existing = 0;
+         netx_tcp_disconnect(pweb, 1);
+/*
+         {
+            char buffer[256];
+            sprintf(buffer, "pcon=%p; (connection within 5 seconds of idle timeout - create new connection idle_timeout=%d;idle_time=%d;)", pcon, psrv->idle_timeout, idle_time);
+            mg_log_event(pweb->plog, pweb, buffer, "mg_obtain_connection", 0);
+         }
+*/
+      }
+   }
+   pcon->time_request = time_now; /* v2.4.26 */
+
 /*
    {
       char buffer[256];
-      sprintf(buffer, "pcon=%p; pcon_last=%p; pcon_free=%p; (alloc=%d;inuse=%d;use_existing=%d;net_connection=%d)", pcon, pcon_last, pcon_free, pcon->alloc, pcon->inuse, use_existing, psrv->net_connection);
+      sprintf(buffer, "pcon=%p; pcon_last=%p; pcon_free=%p; (alloc=%d;inuse=%d;use_existing=%d;net_connection=%d;idle_time=%d)", pcon, pcon_last, pcon_free, pcon->alloc, pcon->inuse, use_existing, psrv->net_connection, idle_time);
       mg_log_event(pweb->plog, pweb, buffer, "mg_obtain_connection", 0);
    }
 */
@@ -3636,6 +3664,8 @@ __try {
                   psrv->offline = 0;
                   /* v2.2.20 */
                   psrv->time_offline = 0;
+                  /* v2.4.26 */
+                  psrv->idle_timeout = 0;
                   psrv->health_check = 0;
                   /* v2.4.25 */
                   psrv->con_retry_no = 0;
@@ -3789,6 +3819,9 @@ __try {
                   }
                   else if (!strcmp(word[0], "output_device")) {
                      psrv->output_device = word[1];
+                  }
+                  else if (!strcmp(word[0], "idle_timeout")) { /* v2.4.26 */
+                     psrv->idle_timeout = (int) strtol(word[1], NULL, 10);
                   }
                   else if (!strcmp(word[0], "health_check")) { /* v2.2.20 */
                      psrv->health_check = (int) strtol(word[1], NULL, 10);
@@ -4223,7 +4256,7 @@ __try {
       }
 
       if (pbuf) { /* v2.4.25 */
-         sprintf(pbuf, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s; health_check=%d; connection_retries=%d/%d; tls=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null", psrv->health_check, psrv->con_retry_no, psrv->con_retry_time, psrv->tls_name ? psrv->tls_name : "null");
+         sprintf(pbuf, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s; idle_timeout=%d; health_check=%d; connection_retries=%d/%d; tls=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null", psrv->idle_timeout, psrv->health_check, psrv->con_retry_no, psrv->con_retry_time, psrv->tls_name ? psrv->tls_name : "null");
          mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: DB Server", 0);
          if (psrv->penv) {
             sprintf(pbuf, "mg_web: configuration: DB Server: environment variables for DB Server name=%s;", psrv->name);
@@ -7675,7 +7708,7 @@ int netx_tcp_handshake(MGWEB *pweb, int context)
 
    pcon = pweb->pcon;
 
-   sprintf(buffer, "dbx1~%s\n", pcon->psrv->uci ? pcon->psrv->uci : "");
+   sprintf(buffer, "dbx1~%s~%d\n", pcon->psrv->uci ? pcon->psrv->uci : "", pcon->psrv->idle_timeout);
    len = (int) strlen(buffer);
 
    netx_tcp_write(pweb, (unsigned char *) buffer, len);

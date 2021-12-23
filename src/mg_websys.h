@@ -1,6 +1,6 @@
 /*
    ----------------------------------------------------------------------------
-   | mg_dba.so|dll                                                            |
+   | mg_web.so|dll                                                            |
    | Description: An abstraction of the InterSystems Cache/IRIS API           |
    |              and YottaDB API                                             |
    | Author:      Chris Munt cmunt@mgateway.com                               |
@@ -21,7 +21,7 @@
    | distributed under the License is distributed on an "AS IS" BASIS,        |
    | WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. |
    | See the License for the specific language governing permissions and      |
-   | limitations under the License.                                           |      
+   | limitations under the License.                                           |
    |                                                                          |
    ----------------------------------------------------------------------------
 */
@@ -34,12 +34,12 @@
 
 #define MAJORVERSION             2
 #define MINORVERSION             4
-#define MAINTVERSION             25
+#define MAINTVERSION             26
 #define BUILDNUMBER              0
 
 #define DBX_VERSION_MAJOR        "2"
 #define DBX_VERSION_MINOR        "4"
-#define DBX_VERSION_BUILD        "25"
+#define DBX_VERSION_BUILD        "26"
 
 #define DBX_VERSION              DBX_VERSION_MAJOR "." DBX_VERSION_MINOR "." DBX_VERSION_BUILD
 #define DBX_COMPANYNAME          "M/Gateway Developments Ltd\0"
