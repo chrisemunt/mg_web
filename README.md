@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-22 December 2021, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+4 April 2022, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.4; Revision 26.
+* Current Release: Version: 2.4; Revision 27.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -104,7 +104,7 @@ Full documentation for building, deploying and using **mg\_web** will be found i
 
 ## License
 
-Copyright (c) 2019-2021 M/Gateway Developments Ltd,
+Copyright (c) 2019-2022 M/Gateway Developments Ltd,
 Surrey UK.                                                      
 All rights reserved.
  
@@ -261,3 +261,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 	* Example: idle\_timeout 300 (close down network connections that have been idle for more than 5 minutes.
 	* This enhancement requires DB Superserver version 4.5; Revision 26 (or later).
 
+### v2.4.27 (4 April 2022)
+
+* Correct a regression that led to request payloads not being correctly transmitted to the DB Server from Nginx-based **mg\_web** installations.
+	* This regression was introduced in v2.2.18.
+	* This change only affects **mg\_web** for Nginx.
