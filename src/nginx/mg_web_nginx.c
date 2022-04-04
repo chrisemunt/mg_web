@@ -4,7 +4,7 @@
    | Description: Nginx HTTP Gateway for InterSystems Cache/IRIS and YottaDB  |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2021 M/Gateway Developments Ltd,                      |
+   | Copyright (c) 2019-2022 M/Gateway Developments Ltd,                      |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -53,9 +53,9 @@
 #define MG_DEFAULT_TIMEOUT    300000
 #define MG_RBUFFER_SIZE       1024
 
-/*
+
 #define MG_API_TRACE          1
-*/
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -159,9 +159,9 @@ int                  mg_websocket_accept_key    (MGWEB *pweb, char * sec_websock
 
 #if defined(MG_API_TRACE)
 #if defined(_WIN32)
-static DBXLOG debug_log = {"c:/temp/mgweb.log", "", "", 0, 0, 0, 0, 0, 0, "", ""};
+static DBXLOG debug_log = {"c:/temp/mgweb.log", "", "", 0, 0, 0, 0, 0, 0, 0, 0, "", ""};
 #else
-static DBXLOG debug_log = {"/tmp/mgweb.log", "", "", 0, 0, 0, 0, 0, 0, "", ""};
+static DBXLOG debug_log = {"/tmp/mgweb.log", "", "", 0, 0, 0, 0, 0, 0, 0, 0, "", ""};
 #endif
 #endif
 
@@ -1408,6 +1408,7 @@ __try {
    got = 0;
  
    if (pwebnginx->r->request_body->temp_file) {
+      /* v2.4.27 */
 /*
       {
          char bufferx[256];
@@ -1433,25 +1434,60 @@ __try {
          mg_log_event(&(mg_system.log), NULL, bufferx, "mg_payload_handler: memory_chain", 0);
       }
 */
-      while (pwebnginx->request_head) {
-         if (pwebnginx->request_buf) {
-            avail = (pwebnginx->request_buf_len - pwebnginx->request_buf_offset);
-            if (avail >= buffer_size) {
-               memcpy((void *) (pbuffer + got), (char *) pwebnginx->request_buf->start, buffer_size);
-               got += buffer_size;
-               buffer_size = 0;
-               pwebnginx->request_buf_offset += buffer_size;
+/*
+      while (cl) {
+         buf = cl->buf;
+
+         if (buf->pos) {
+            len = (int) (buf->last - buf->pos);
+            if (len == 0) {
+               len = pweb->request_clen;
+               memcpy((void *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used), (char *) buf->start, len);
+               total += len;
+               pweb->input_buf.len_used += len;
             }
-            else if (avail) {
-               memcpy((void *) (pbuffer + got), (char *) pwebnginx->request_buf->start, avail);
-               got += avail;
-               buffer_size -= avail;
-               pwebnginx->request_buf_offset += avail;
-            }
-            if (buffer_size < 1) {
-               break;
+            else {
+               memcpy((void *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used), (char *) buf->start, len);
+               total += len;
+               pweb->input_buf.len_used += len;
             }
          }
+         cl = cl->next;
+      }
+
+*/
+      /* v2.4.27 */
+      while (buffer_size) {
+         avail = 0;
+         if (pwebnginx->request_buf) {
+            avail = (pwebnginx->request_buf_len - pwebnginx->request_buf_offset);
+         }
+/*
+         {
+            char bufferx[256];
+            sprintf(bufferx, "request_clen=%d; buffer_size=%d; request_buf=%p; request_buf_len=%d; request_buf_offset=%d; avail=%d; buffer_size=%d;", pweb->request_clen, buffer_size, pwebnginx->request_buf, pwebnginx->request_buf_len, pwebnginx->request_buf_offset, avail, buffer_size);
+            mg_log_event(&(mg_system.log), NULL, bufferx, "mg_payload_handler: memory_chain", 0);
+         }
+*/
+         if (avail) {
+            if (avail >= buffer_size) {
+               memcpy((void *) (pbuffer + got), (char *) (pwebnginx->request_buf->start + pwebnginx->request_buf_offset), buffer_size);
+               got += buffer_size;
+               pwebnginx->request_buf_offset += buffer_size;
+               buffer_size = 0;
+               break;
+            }
+            else {
+               memcpy((void *) (pbuffer + got), (char *) (pwebnginx->request_buf->start + pwebnginx->request_buf_offset), avail);
+               got += avail;
+               pwebnginx->request_buf_offset += avail;
+               buffer_size -= avail;
+            }
+         }
+         if (!pwebnginx->request_head) { /* end of buffer chain */
+            break;
+         }
+         /* this chain element */
          pwebnginx->request_buf = pwebnginx->request_head->buf;
          pwebnginx->request_buf_len = 0;
          pwebnginx->request_buf_offset = 0;
@@ -1463,7 +1499,7 @@ __try {
             pwebnginx->request_total += len;
             pwebnginx->request_buf_len = len;
          }
-         pwebnginx->request_head = pwebnginx->request_head->next;
+         pwebnginx->request_head = pwebnginx->request_head->next; /* next chain element */
       }
    }
 
