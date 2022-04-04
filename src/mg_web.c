@@ -4,7 +4,7 @@
    | Description: HTTP Gateway for InterSystems Cache/IRIS and YottaDB        |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2021 M/Gateway Developments Ltd,                      |
+   | Copyright (c) 2019-2022 M/Gateway Developments Ltd,                      |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -133,12 +133,16 @@ Version 2.4.24 27 September 2021:
 
 Version 2.4.25 13 October 2021:
    Introduce a DB Server configuration parameter (connection_retries) to control the number of attempts (and the total time spent) in connecting to a DB Server before marking it offline.
-	   connection_retries number_of_connection_retries/total_time_allowed
+      connection_retries number_of_connection_retries/total_time_allowed
 
 Version 2.4.26 22 December 2021:
    Introduce a DB Server configuration parameter (idle_timeout) to limit the amount of time that a network connection will remain in the pool without receiving any work.
       idle_timeout timeout_in_seconds
    This enhancement requires DB Superserver version 4.5; Revision 26 (or later).
+
+Version 2.4.27 4 April 2022:
+   Correct a regression that led to request payloads not being correctly transmitted to the DB Server from Nginx-based mg_web installations.
+      This change only affects mg_web for Nginx and this regression was introduced in v2.2.18.
 
 */
 
