@@ -4,7 +4,7 @@
    | Description: Apache HTTP Gateway for InterSystems Cache/IRIS and YottaDB |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2022 M/Gateway Developments Ltd,                      |
+   | Copyright (c) 2019-2023 M/Gateway Developments Ltd,                      |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -270,7 +270,8 @@ __try {
                }
             }
             if (!ok) {
-               ap_log_rerror(APLOG_MARK, APLOG_NOTICE, 0, r, "mg_web: Bad request: %s", r->uri);
+               /* v2.4.28 */
+               /* ap_log_rerror(APLOG_MARK, APLOG_NOTICE, 0, r, "mg_web: Bad request: %s", r->uri); */
                return DECLINED;
             }
          }
