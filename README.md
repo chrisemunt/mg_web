@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-4 April 2022, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+17 January 2023, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.4; Revision 27.
+* Current Release: Version: 2.4; Revision 28.
 * [Release Notes](#RelNotes) can be found at the end of this document.
 
 ## Overview
@@ -66,7 +66,7 @@ A simple 'Hello World' function would look something like the following pseudo-c
 
 In production, the above functions would, of course, be crafted in the scripting language provided by the DB Server.
 
-## Pre-requisites
+## Prerequisites
 
 * A supported web server.  Currently **mg\_web** supports **Microsoft IIS**, **Apache** and **Nginx**.
 
@@ -104,10 +104,10 @@ Full documentation for building, deploying and using **mg\_web** will be found i
 
 ## License
 
-Copyright (c) 2019-2022 M/Gateway Developments Ltd,
+Copyright (c) 2019-2023 M/Gateway Developments Ltd,
 Surrey UK.                                                      
 All rights reserved.
- 
+
 http://www.mgateway.com                                                  
 Email: cmunt@mgateway.com
  
@@ -266,3 +266,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Correct a regression that led to request payloads not being correctly transmitted to the DB Server from Nginx-based **mg\_web** installations.
 	* This regression was introduced in v2.2.18.
 	* This change only affects **mg\_web** for Nginx.
+
+### v2.4.28 (17 January 2023)
+
+* Remove an unnecessary "mg\_web: Bad request" error that was previously recorded in the Apache configuration for requests that were destined to be served by modules other than **mg\_web**.
+* Correct a fault that led to **mg\_web** connections erroneously closing down if no value was specified for the (optional) **idle\_timeout** configuration parameter. 
+
