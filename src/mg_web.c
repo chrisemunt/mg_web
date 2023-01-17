@@ -145,7 +145,7 @@ Version 2.4.27 4 April 2022:
       This change only affects mg_web for Nginx and this regression was introduced in v2.2.18.
 
 Version 2.4.28 17 January 2023:
-   Remove an unnecessary "mg_web: Bad request" error that was previously recorded in the Apache configuration for requests that were destined to be served by modules other than mg_web.
+   Remove an unnecessary "mg_web: Bad request" error that was previously recorded in the Apache event log for requests that were destined to be served by modules other than mg_web.
    Correct a fault that led to mg_web connections erroneously closing down if no value was specified for the (optional) idle_timeout configuration parameter. 
 
 */
