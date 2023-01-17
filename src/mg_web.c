@@ -4,7 +4,7 @@
    | Description: HTTP Gateway for InterSystems Cache/IRIS and YottaDB        |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2022 M/Gateway Developments Ltd,                      |
+   | Copyright (c) 2019-2023 M/Gateway Developments Ltd,                      |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -143,6 +143,10 @@ Version 2.4.26 22 December 2021:
 Version 2.4.27 4 April 2022:
    Correct a regression that led to request payloads not being correctly transmitted to the DB Server from Nginx-based mg_web installations.
       This change only affects mg_web for Nginx and this regression was introduced in v2.2.18.
+
+Version 2.4.28 17 January 2023:
+   Remove an unnecessary "mg_web: Bad request" error that was previously recorded in the Apache configuration for requests that were destined to be served by modules other than mg_web.
+   Correct a fault that led to mg_web connections erroneously closing down if no value was specified for the (optional) idle_timeout configuration parameter. 
 
 */
 
@@ -1983,7 +1987,7 @@ __try {
    /* v2.4.26 */
    idle_time = 0;
    time_now = time(NULL);
-   if (psrv->net_connection == 1 && pcon->time_request) { /* check connetion idle timeout for network connections */
+   if (psrv->net_connection == 1 && psrv->idle_timeout && pcon->time_request) { /* v2.4.28 check connetion idle timeout for network connections */
       idle_time = (int) difftime(time_now, pcon->time_request);
       if (idle_time > (psrv->idle_timeout - 5)) {
          use_existing = 0;
