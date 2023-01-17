@@ -269,6 +269,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 ### v2.4.28 (17 January 2023)
 
-* Remove an unnecessary "mg\_web: Bad request" error that was previously recorded in the Apache configuration for requests that were destined to be served by modules other than **mg\_web**.
+* Remove an unnecessary "mg\_web: Bad request" error that was previously recorded in the Apache event log for requests that were destined to be served by modules other than **mg\_web**.
 * Correct a fault that led to **mg\_web** connections erroneously closing down if no value was specified for the (optional) **idle\_timeout** configuration parameter. 
 
