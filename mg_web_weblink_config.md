@@ -157,6 +157,8 @@ Paste the code below into it:
         weblink(%CGIEVAR,%KEY)
            new (%CGIEVAR,%KEY)
            ;
+           set %METHOD=$get(%CGIEVAR("REQUEST_METHOD"))
+           ;
            ; Intercept Event Broker calls (XMLHTTP calls fired from mgwx.js)
            ; 
            if $data(%KEY("MGWreq")) do eventbroker(.%CGIEVAR,.%KEY) QUIT
