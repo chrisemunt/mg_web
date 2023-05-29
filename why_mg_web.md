@@ -2,42 +2,42 @@
 
 ## Why We Created *mg_web*
 
-These days, most people who use the Cach&eacute; and IRIS database technologies use *Cach&eacute; Server Pages* (*CSP*) and its underlying core *CSP* Gateway interface as the basis of their web applications and to underpin their REST APIs.††However, there is a sizeable community of Cach&eacute; users who still rely and depend on a legacy of web applications, created before *CSP* emerged, and built using its precursor technology - *WebLink* - and, in many cases, its associated development framework *WebLink Developer* (*WLD*).
+These days, most people who use the Cach&eacute; and IRIS database technologies use *Cach&eacute; Server Pages* (*CSP*) and its underlying core *CSP* Gateway interface as the basis of their web applications and to underpin their REST APIs.¬†¬†However, there is a sizeable community of Cach&eacute; users who still rely and depend on a legacy of web applications, created before *CSP* emerged, and built using its precursor technology - *WebLink* - and, in many cases, its associated development framework *WebLink Developer* (*WLD*).
 
-Furthermore, there are also Cach&eacute; users who have built their Web Applications and REST APIs using our own *Enterprise Web Developer* (*EWD*) framework.††Whilst a key feature of *EWD* is its ability to be compiled into a number of different run-time technologies (eg *PHP*, *CSP*, *WebLink*), most Cach&eacute;-based *EWD* users have chosen to use *WebLink* as the target run-time technology, since this has provided the most straightforward and efficient technology for their purposes.
+Furthermore, there are also Cach&eacute; users who have built their Web Applications and REST APIs using our own *Enterprise Web Developer* (*EWD*) framework.¬†¬†Whilst a key feature of *EWD* is its ability to be compiled into a number of different run-time technologies (eg *PHP*, *CSP*, *WebLink*), most Cach&eacute;-based *EWD* users have chosen to use *WebLink* as the target run-time technology, since this has provided the most straightforward and efficient technology for their purposes.
 
 However, both these user communities have begun to find that they are facing a problem: whilst they are keen to realise the many benefits of migrating from Cach&eacute; to IRIS, *WebLink* is now a legacy product that is unavailable for IRIS, and its support is becoming increasingly limited.
 
-The problem is that there is no straightforward option for migration to *CSP* available for customers who have built their applications on top of *WebLink*, even for users of *WLD*.††Their only available options would be a costly and risky re-write of their applications, something that might even warrant or be the catalyst for them moving to a different, more ìmainstreamî database technology.††At the very least it will hinder their migration from Cach&eacute; to IRIS.
+The problem is that there is no straightforward option for migration to *CSP* available for customers who have built their applications on top of *WebLink*, even for users of *WLD*.¬†¬†Their only available options would be a costly and risky re-write of their applications, something that might even warrant or be the catalyst for them moving to a different, more ‚Äúmainstream‚Äù database technology.¬†¬†At the very least it will hinder their migration from Cach&eacute; to IRIS.
 
-Users of *EWD* could, in theory, recompile their applications to use *CSP*, but this would reduce the performance, throughput and efficiency of resource utilisation to which they have become accustomed with *WebLink*.††So, once again, their migration to IRIS is made uncertain.
+Users of *EWD* could, in theory, recompile their applications to use *CSP*, but this would reduce the performance, throughput and efficiency of resource utilisation to which they have become accustomed with *WebLink*.¬†¬†So, once again, their migration to IRIS is made uncertain.
 
-We therefore decided that the time had come to provide a life-line for these customers, and produce a new Web Gateway interface technology that would be not only capable of working on both Cach&eacute; and IRIS, but also capable of fully emulating the behaviour of *WebLink*.††By making such a Web Gateway available as an Open Source product, and by ensuring that it used only plain ObjectScript (aka M code) and official InterSystems networking APIs, our aim was to create a replacement technology for these legacy ìrefugeeî customers that would be perceived by them as low in risk and high in benefit, and that could ensure they continue to benefit from using InterSystems database technologies into the future.
+We therefore decided that the time had come to provide a life-line for these customers, and produce a new Web Gateway interface technology that would be not only capable of working on both Cach&eacute; and IRIS, but also capable of fully emulating the behaviour of *WebLink*.¬†¬†By making such a Web Gateway available as an Open Source product, and by ensuring that it used only plain ObjectScript (aka M code) and official InterSystems networking APIs, our aim was to create a replacement technology for these legacy ‚Äúrefugee‚Äù customers that would be perceived by them as low in risk and high in benefit, and that could ensure they continue to benefit from using InterSystems database technologies into the future.
 
 
 ## An Opportunity to Create a Modern Web Gateway for Cach&eacute; and IRIS
 
-Having recognised the need for a replacement for *WebLink*, we decided this would also be the catalyst for designing a modern Web Gateway for Cach&eacute; and IRIS.††*WebLink* was originally designed (actually by Chris Munt, here at M/Gateway Developments) in the mid-1990s, and *CSP* (again with Chris' help) emerged towards the end of the 1990s.††The architectures used by the main Web Servers at that time (Apache and IIS) were still in their infancy, and very different from the ultra-high performance, event-driven, asynchronous architectures used by the current big three Web Servers (Apache, NGINX and IIS).††As a result, both *WebLink* and *CSP* are now somewhat architecturally out of place.††Whilst *WebLink* and *CSP* are still able to work with the new generation of Web Servers, their architectures are now an awkward fit and not optimised to get the most out of what the current Web Servers make potentially possible.
+Having recognised the need for a replacement for *WebLink*, we decided this would also be the catalyst for designing a modern Web Gateway for Cach&eacute; and IRIS.¬†¬†*WebLink* was originally designed (actually by Chris Munt, here at MGateway) in the mid-1990s, and *CSP* (again with Chris' help) emerged towards the end of the 1990s.¬†¬†The architectures used by the main Web Servers at that time (Apache and IIS) were still in their infancy, and very different from the ultra-high performance, event-driven, asynchronous architectures used by the current big three Web Servers (Apache, NGINX and IIS).¬†¬†As a result, both *WebLink* and *CSP* are now somewhat architecturally out of place.¬†¬†Whilst *WebLink* and *CSP* are still able to work with the new generation of Web Servers, their architectures are now an awkward fit and not optimised to get the most out of what the current Web Servers make potentially possible.
 
 Our new Web Gateway technology, which we have named *mg_web*, has been specifically designed to work optimally with the architectures of the current generation of Web Servers, and, as a result, will deliver better and more reliable performance than the *WebLink* technology it is designed to replace.
 
 
-We also recognised that there was a second opportunity for modernising the Web Gateway.††
+We also recognised that there was a second opportunity for modernising the Web Gateway.¬†¬†
 
-At the time when *WebLink* and *CSP* were developed, the prevailing requirement was to support server-page-style Web Applications, where the pages delivered to the web browser were generated by logic written in ObjectScript.††*WLD*, *CSP* and *EWD* are all examples of such server-page application frameworks.††*WebLink* and *CSP* were therefore designed and optimised around that use-case.
+At the time when *WebLink* and *CSP* were developed, the prevailing requirement was to support server-page-style Web Applications, where the pages delivered to the web browser were generated by logic written in ObjectScript.¬†¬†*WLD*, *CSP* and *EWD* are all examples of such server-page application frameworks.¬†¬†*WebLink* and *CSP* were therefore designed and optimised around that use-case.
 
-These days, the majority of Web Applications have moved to client-side, JavaScript-based logic, and the back-end is usually interfaced via REST APIs which provide services that serve up datasets (typically represented as JSON) generated from the back-end database.†
+These days, the majority of Web Applications have moved to client-side, JavaScript-based logic, and the back-end is usually interfaced via REST APIs which provide services that serve up datasets (typically represented as JSON) generated from the back-end database.¬†
 
 Not only that, REST APIs are now also the de facto standard for integrating systems of any kind, and REST clients can be all manner of systems and applications, not simply web browsers.
 
 Once again, whilst both *WebLink* and *CSP* can be used to support REST APIs, they aren't actually optimised for that role, and add unnecessary complexity to what, in effect, should be a very simple and lightweight network "pipe".
 
-So the second design aim while creating our new *mg_web* Web Gateway was to ensure†that its architecture was specifically optimised for use with Cach&eacute; and IRIS in this now prevailing REST/service-orientated role, whilst, nevertheless, ensuring excellent performance for legacy server-page Web Applications.
+So the second design aim while creating our new *mg_web* Web Gateway was to ensure¬†that its architecture was specifically optimised for use with Cach&eacute; and IRIS in this now prevailing REST/service-orientated role, whilst, nevertheless, ensuring excellent performance for legacy server-page Web Applications.
 
 
 ## Updated Protocol Support
 
-When *WebLink* and *CSP* were developed, the only protocol they supported was HTTP/1.0.††Since then, both technologies have been updated to include support for HTTP/1.1, but neither currently support the very latest HTTP/2 protocol.
+When *WebLink* and *CSP* were developed, the only protocol they supported was HTTP/1.0.¬†¬†Since then, both technologies have been updated to include support for HTTP/1.1, but neither currently support the very latest HTTP/2 protocol.
 
 HTTP/2 brings some key benefits, the main one being the improvement of page loading times by:
 
@@ -45,24 +45,24 @@ HTTP/2 brings some key benefits, the main one being the improvement of page load
 - multiplexing of requests for resources, meaning, for example, that a browser can fetch multiple resources (ie HTML, CSS, JavaScript files) simultaneously via a single TCP connection rather than, as previously, having to open multiple TCP connections
 - compression of header frames to reduce the size of transmitted payloads
 
-So, weíve made sure that *mg_web* includes full support for HTTP/2, meaning a potential performance improvement for those legacy applications.
+So, we‚Äôve made sure that *mg_web* includes full support for HTTP/2, meaning a potential performance improvement for those legacy applications.
 
-For good measure, *mg_web* also includes support for WebSockets.  WebSockets allow you to break free of the simple request/response nature of HTTP: HTTP prevents a server sending information to a browser unless the browser first sends a request to the server.††With WebSockets, your back-end Cach&eacute; or IRIS logic can deliver information to the browser whenever and as soon as it becomes available.††*mg_web* also supports WebSockets, but just as for REST APIs, *mg_web* minimises the overheads: you get the thinnest network ìpipeî possible for moving data as WebSocket messages to and from your Cach&eacute; or IRIS database.
+For good measure, *mg_web* also includes support for WebSockets.  WebSockets allow you to break free of the simple request/response nature of HTTP: HTTP prevents a server sending information to a browser unless the browser first sends a request to the server.¬†¬†With WebSockets, your back-end Cach&eacute; or IRIS logic can deliver information to the browser whenever and as soon as it becomes available.¬†¬†*mg_web* also supports WebSockets, but just as for REST APIs, *mg_web* minimises the overheads: you get the thinnest network ‚Äúpipe‚Äù possible for moving data as WebSocket messages to and from your Cach&eacute; or IRIS database.
 
 
 
 ## A Tried and Tested Architecture
 
-Thereís one thing we didnít need to change: at the core of *mg_web*ís design is a queue and dispatch architecture.††Itís a tried and tested architecture that has been used successfully since the mid-1990s in not only *WebLink* but also *CSP*, allowing demand to be perfectly balanced with the resources available in your Cach&eacute; or IRIS system.††So if youíre familiar with the way *WebLink* works, youíll be at home with *mg_web* too!
+There‚Äôs one thing we didn‚Äôt need to change: at the core of *mg_web*‚Äôs design is a queue and dispatch architecture.¬†¬†It‚Äôs a tried and tested architecture that has been used successfully since the mid-1990s in not only *WebLink* but also *CSP*, allowing demand to be perfectly balanced with the resources available in your Cach&eacute; or IRIS system.¬†¬†So if you‚Äôre familiar with the way *WebLink* works, you‚Äôll be at home with *mg_web* too!
 
 
-## Will you Lose Anything by Switching from *WebLink* to *mg_web*?††
+## Will you Lose Anything by Switching from *WebLink* to *mg_web*?¬†¬†
 
 The answer is no:
 
-- *mg_web* can be configured to fully emulate the behaviour of *WebLink*.††This means your existing *WebLink* and *WLD* applications and any *WebLink*-based REST APIs can be used without modification, *right out of the box*.
+- *mg_web* can be configured to fully emulate the behaviour of *WebLink*.¬†¬†This means your existing *WebLink* and *WLD* applications and any *WebLink*-based REST APIs can be used without modification, *right out of the box*.
 
-- *mg_web* will still allow you to design the most efficient and resilient Web architecture for your particular needs.† For example, a†single Web Server can be integrated with as many Cach&eacute; and/or IRIS servers as you need, each connecting to potentially different namespaces.††Alternatively (or in addition), multiple Web Servers can be integrated with the same or different Cach&eacute; and/or IRIS servers to create a redundant mesh of connections.
+- *mg_web* will still allow you to design the most efficient and resilient Web architecture for your particular needs.¬† For example, a¬†single Web Server can be integrated with as many Cach&eacute; and/or IRIS servers as you need, each connecting to potentially different namespaces.¬†¬†Alternatively (or in addition), multiple Web Servers can be integrated with the same or different Cach&eacute; and/or IRIS servers to create a redundant mesh of connections.
 
-- In terms of support, itís important to understand that *mg_web* is a free Open Source (Apache 2 licensed) product.††So you have the confidence and long-term security of knowing that you have full access to its source code, both for the gateway itself (which runs on the Web Server), and the ObjectScript†interface code which runs on your Cach&eacute; or IRIS server(s).†††The latter pure ObjectScript code uses nothing but the standard APIs provided by InterSystems for its network interfacing, and therefore works with any version of Cach&eacute; (including Ensemble) and IRIS.††However, you should also know that M/Gateway Developments Ltd can provide you with the high-quality support you may need for your *mg_web* installation: please contact us for further information.
+- In terms of support, it‚Äôs important to understand that *mg_web* is a free Open Source (Apache 2 licensed) product.¬†¬†So you have the confidence and long-term security of knowing that you have full access to its source code, both for the gateway itself (which runs on the Web Server), and the ObjectScript¬†interface code which runs on your Cach&eacute; or IRIS server(s).¬†¬†¬†The latter pure ObjectScript code uses nothing but the standard APIs provided by InterSystems for its network interfacing, and therefore works with any version of Cach&eacute; (including Ensemble) and IRIS.¬†¬†However, you should also know that MGateway Ltd can provide you with the high-quality support you may need for your *mg_web* installation: please contact us for further information.
 

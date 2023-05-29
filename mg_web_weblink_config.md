@@ -131,25 +131,34 @@ Using *Studio*, create a new ObjectScript routine named *%zmgweb*.
 
 Paste the code below into it:
 
-           ; WebLInk/WLD Interface
+           ; WebLink/WLD Interface
            ;
         web(%CGIEVAR,%content,%sys)
            ; Normalise the incoming request information to match
            ; how WebLink would hold it
            ;
-           new %s,%rc,%def,%KEY
+           new %s,%rc,%def,%ct,%KEY,%KEYHEAD
            set %s=$$stream^%zmgsis(.%sys)
            set %rc=$$nvpair^%zmgsis(.%KEY,$get(%CGIEVAR("QUERY_STRING")))
-           set %rc=$$nvpair^%zmgsis(.%KEY,.%content)
+           set %rc=$$content^%zmgsis(.%KEY,.%KEYHEAD,.%content,.%CGIEVAR)
            set %KEY("MGWLPN")=$get(%sys("server"))
            set %KEY("MGWCHD")=0
            set %KEY("MGWUCI")=$$getuci^%zmgsis()
            set %KEY("MGWNSP")=%KEY("MGWUCI")
            set %KEY("MGWLIB")=$get(%CGIEVAR("SCRIPT_NAME"))
-           set %def=$data(%content)
-           if %def,$get(%CGIEVAR("CONTENT_TYPE"))'="application/x-www-form-urlencoded" do
+           set %def=$data(%content),%ct=$get(%CGIEVAR("CONTENT_TYPE"))
+           if %def,%ct'="application/x-www-form-urlencoded",%ct'["boundary=" do
            . if %def=1 set ^MGW("MPC",$job,"CONTENT",1)=%content QUIT
            . merge ^MGW("MPC",$job,"CONTENT")=%content
+           . QUIT
+           set name="" for  set name=$order(%KEYHEAD(name)) quit:name=""  do
+           . new filename,len,data
+           . set filename=$piece($piece($piece($get(%KEYHEAD(name,"Content-Disposition")),"filename=",2)," ",1),";",1)
+           . set len=$length(filename) if len>1,$extract(filename)="""",$extract(filename,len)="""" set @("filename="_filename)
+           . set data=$get(%KEY(name))
+           . set %MPC(name)=""
+           . set ^MGW("MPC",$J,name,1)=data
+           . set %KEY(name)="1#1~0~"_$length(data)_"~"_$get(%KEYHEAD(name,"Content-Type"))_"~"_filename
            . QUIT
            do weblink(.%CGIEVAR,.%KEY)
            QUIT %s
@@ -196,8 +205,26 @@ Paste the code below into it:
            QUIT
            ;
 
-Save and compile this ObjectScript routine.
+Save and compile this ObjectScript routine.  This routine calls procedures in routine %mgwj. If you don't have this routine, the code for the required procedures is as follows.
 
+        HTTPA ; HTML wrapper - top
+           write "HTTP/1.1 200 OK"_$char(13,10)
+           write "Content-type: text/html"_$char(13,10)
+           write "Connection: close"_$char(13,10)
+           write $char(13,10)
+           write "<HTML>"_$char(13,10)
+           write "<HEAD><TITLE>WebLink - Private Command Shell</TITLE></HEAD>"_$char(13,10)
+           write "<BODY>"_$char(13,10)
+           QUIT
+           ;
+        HTTPZ ; HTML wrapper - tail
+           write "</BODY>"_$char(13,10)
+           write "</HTML>"_$char(13,10)
+           QUIT
+           ;
+        END ; Send the end-of-data marker to the client
+           write $char(2,2,10)
+           QUIT
 
 If you already have a custom ^%ZMGW2 routine, you should leave it alone and *mg_web* will invoke it
 for you.

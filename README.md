@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-17 January 2023, M/Gateway Developments Ltd [http://www.mgateway.com](http://www.mgateway.com)
+29 May 2023, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.4; Revision 28.
+* Current Release: Version: 2.4; Revision 29.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -104,7 +104,7 @@ Full documentation for building, deploying and using **mg\_web** will be found i
 
 ## License
 
-Copyright (c) 2019-2023 M/Gateway Developments Ltd,
+Copyright (c) 2019-2023 MGateway Ltd,
 Surrey UK.                                                      
 All rights reserved.
 
@@ -271,4 +271,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 * Remove an unnecessary "mg\_web: Bad request" error that was previously recorded in the Apache event log for requests that were destined to be served by modules other than **mg\_web**.
 * Correct a fault that led to **mg\_web** connections erroneously closing down if no value was specified for the (optional) **idle\_timeout** configuration parameter. 
+
+### v2.4.29 (29 May 2023)
+
+* Documentation update.
 
