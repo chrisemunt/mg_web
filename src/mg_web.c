@@ -4,7 +4,7 @@
    | Description: HTTP Gateway for InterSystems Cache/IRIS and YottaDB        |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2023 M/Gateway Developments Ltd,                      |
+   | Copyright (c) 2019-2023 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -147,6 +147,9 @@ Version 2.4.27 4 April 2022:
 Version 2.4.28 17 January 2023:
    Remove an unnecessary "mg_web: Bad request" error that was previously recorded in the Apache event log for requests that were destined to be served by modules other than mg_web.
    Correct a fault that led to mg_web connections erroneously closing down if no value was specified for the (optional) idle_timeout configuration parameter. 
+
+Version 2.4.29 29 May 2023:
+   Documentation update.
 
 */
 
