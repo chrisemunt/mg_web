@@ -151,6 +151,11 @@ Version 2.4.28 17 January 2023:
 Version 2.4.29 29 May 2023:
    Documentation update.
 
+Version 2.5.30 19 July 2023:
+   Introduce a parameter to limit the number of connections created to a DB Server
+      max_connections
+   When the limit is reached, and all connections in the pool are busy, additional requests will queue up to the time allowed in the timeout setting.
+
 */
 
 
@@ -504,6 +509,20 @@ mg_web_process_failover:
 
       return 0;
    }
+   if (rc == CACHE_MAXCON) { /* v2.5.30 */
+      if (!pweb->error[0]) {
+         strcpy(pweb->error, "Cannot connect to DB Server - All connections busy");
+      }
+      mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
+
+      pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
+      mg_web_http_error(pweb, 503, MG_CUSTOMPAGE_DBSERVER_BUSY);
+      MG_LOG_RESPONSE_HEADER(pweb);
+      mg_submit_headers(pweb);
+
+      return 0;
+   }
+
    DBX_TRACE(20)
    if (rc != CACHE_SUCCESS) {
       if (!pweb->error[0]) {
@@ -1851,7 +1870,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 int mg_obtain_connection(MGWEB *pweb)
 {
    DBX_TRACE_INIT(0)
-   int rc, use_existing, idle_time;
+   int rc, use_existing, idle_time, connections_inuse, queue_time, queue_timeout, server_busy;
    DBXCON *pcon, *pcon_last, *pcon_free;
    char bufferx[256], info[256];
    MGSRV *psrv;
@@ -1914,14 +1933,42 @@ __try {
       psrv = ppath->servers[pweb->server_no].psrv;
    }
 
+   queue_timeout = NETX_QUEUE_TIMEOUT;
+   queue_time = 0;
+   server_busy = 0;
+   connections_inuse = 0;
    pcon = mg_connection;
    while (pcon) {
       pcon_last = pcon;
       if (pcon->alloc && pcon->psrv == psrv) {
-         if (psrv->net_connection == 1 && pcon->inuse == 0) { /* network */
-            pcon->inuse = 1;
-            use_existing = 1;
-            break;
+         if (psrv->net_connection == 1) { /* network */
+            if (pcon->inuse == 0) {
+               pcon->inuse = 1;
+               use_existing = 1;
+               break;
+            }
+            else { /* v2.5.30 */
+               connections_inuse ++;
+               if (psrv->max_connections && connections_inuse >= psrv->max_connections) {
+                  if (psrv->timeout) {
+                     queue_timeout = psrv->timeout;
+                  }
+                  if (queue_time < queue_timeout) { /* queue request */
+                     mg_leave_critical_section((void *) &mg_global_mutex);
+                     mg_sleep(1000);
+                     mg_enter_critical_section((void *) &mg_global_mutex);
+                     queue_time ++;
+                     connections_inuse = 0;
+                     pcon = mg_connection;
+                     continue;
+                  }
+                  else { /* give up and return HTTP Server Busy */
+                     pcon = NULL;
+                     server_busy = 1;
+                     break;
+                  }
+               }
+            }
          }
          if (psrv->net_connection == 0) { /* API */
             pcon->inuse = 1;
@@ -1935,30 +1982,32 @@ __try {
       pcon = pcon->pnext;
    }
    if (!pcon) {
-      if (pcon_free) {
-         pcon = pcon_free;
-         pcon->alloc = 1;
-         pcon->inuse = 1;
-         pcon->closed = 0;
-         pcon->no_requests = 0;
-      }
-      else {
-         pcon = (DBXCON *) mg_malloc(NULL, sizeof(DBXCON), 0);
-         if (pcon) {
-            memset((void *) pcon, 0, sizeof(DBXCON));
-            if (!mg_connection) {
-               mg_connection = pcon;
-            }
-            else {
-               pcon_last->pnext = pcon;
-            }
+      if (!server_busy) {
+         if (pcon_free) {
+            pcon = pcon_free;
             pcon->alloc = 1;
             pcon->inuse = 1;
             pcon->closed = 0;
-            pcon->time_request = 0; /* v2.4.26 */
             pcon->no_requests = 0;
-            pcon->int_pipe[0] = 0;
-            pcon->int_pipe[1] = 0;
+         }
+         else {
+            pcon = (DBXCON *) mg_malloc(NULL, sizeof(DBXCON), 0);
+            if (pcon) {
+               memset((void *) pcon, 0, sizeof(DBXCON));
+               if (!mg_connection) {
+                  mg_connection = pcon;
+               }
+               else {
+                  pcon_last->pnext = pcon;
+               }
+               pcon->alloc = 1;
+               pcon->inuse = 1;
+               pcon->closed = 0;
+               pcon->time_request = 0; /* v2.4.26 */
+               pcon->no_requests = 0;
+               pcon->int_pipe[0] = 0;
+               pcon->int_pipe[1] = 0;
+            }
          }
       }
    }
@@ -1967,7 +2016,13 @@ __try {
       psrv->no_requests ++;
    }
    mg_leave_critical_section((void *) &mg_global_mutex);
-
+/*
+   {
+      char buffer[256];
+      sprintf(buffer, "pcon=%p; connections_inuse=%d; queue_timeout=%d; queue_time=%d; server_busy=%d;", pcon, connections_inuse, queue_timeout, queue_time, server_busy);
+      mg_log_event(pweb->plog, pweb, buffer, "mg_obtain_connection", 0);
+   }
+*/
    /* v2.4.24 */
    if (bufferx[0]) {
       mg_log_event(pweb->plog, pweb, bufferx, "mg_web: connectivity error", 0);
@@ -1977,6 +2032,10 @@ __try {
    }
 
    pweb->psrv = psrv;
+   if (!pcon && server_busy) { /* v2.5.30 */
+      strcpy(pweb->error, "Cannot connect to DB Server - All connections busy");
+      return CACHE_MAXCON;
+   }
    if (!pcon) {
       strcpy(pweb->error, "Unable to allocate memory for a new connection");
       return CACHE_FAILURE;
@@ -3681,6 +3740,7 @@ __try {
                   /* v2.4.25 */
                   psrv->con_retry_no = 0;
                   psrv->con_retry_time = 0;
+                  psrv->max_connections = 0; /* v2.5.30 */
                   psrv->ptls = NULL; /* v2.3.21 */
                   if (psrv_prev) {
                      psrv_prev->pnext = psrv;
@@ -3843,6 +3903,9 @@ __try {
                      if (p) {
                         psrv->con_retry_time = (int) strtol(++ p, NULL, 10);
                      }
+                  }
+                  else if (!strcmp(word[0], "max_connections")) { /* v2.5.30 */
+                     psrv->max_connections = (int) strtol(word[1], NULL, 10);
                   }
                   else if (!strcmp(word[0], "tls")) { /* v2.3.21 */
                      psrv->tls_name = word[1];
@@ -4267,7 +4330,7 @@ __try {
       }
 
       if (pbuf) { /* v2.4.25 */
-         sprintf(pbuf, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s; idle_timeout=%d; health_check=%d; connection_retries=%d/%d; tls=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null", psrv->idle_timeout, psrv->health_check, psrv->con_retry_no, psrv->con_retry_time, psrv->tls_name ? psrv->tls_name : "null");
+         sprintf(pbuf, "server name=%s; type=%s; path=%s; host=%s; port=%d; username=%s; password=%s; idle_timeout=%d; health_check=%d; connection_retries=%d/%d; max_connections=%d; tls=%s;", psrv->name, psrv->dbtype_name ? psrv->dbtype_name : "null", psrv->shdir ? psrv->shdir : "null", psrv->ip_address ? psrv->ip_address : "null", psrv->port, psrv->username ? psrv->username : "null", psrv->password ? psrv->password : "null", psrv->idle_timeout, psrv->health_check, psrv->con_retry_no, psrv->con_retry_time, psrv->max_connections, psrv->tls_name ? psrv->tls_name : "null");
          mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: DB Server", 0);
          if (psrv->penv) {
             sprintf(pbuf, "mg_web: configuration: DB Server: environment variables for DB Server name=%s;", psrv->name);

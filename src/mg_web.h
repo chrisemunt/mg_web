@@ -218,6 +218,8 @@ typedef struct {
 #define CACHE_BAD_CLASS       -105
 #define CACHE_BAD_METHOD      -106
 
+#define CACHE_MAXCON          -120
+
 #define CACHE_INCREMENTAL_LOCK   1
 
 /* End of Cache/IRIS */
@@ -439,6 +441,7 @@ typedef int    xc_status_t;
 
 
 #define NETX_TIMEOUT             30
+#define NETX_QUEUE_TIMEOUT       60
 #define NETX_IPV6                1
 #define NETX_READ_EOF            -9
 #define NETX_READ_NOCON          -1
@@ -1076,6 +1079,7 @@ typedef struct tagMGSRV {
    int               health_check;  /* v2.2.20 */
    int               con_retry_time; /* v2.4.25 */
    int               con_retry_no;
+   int               max_connections; /* v2.5.30 */
    char              *name;
    char              lcname[64]; /* v2.1.17 */
    int               name_len;
