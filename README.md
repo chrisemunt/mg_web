@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-29 May 2023, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+19 July 2023, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.4; Revision 29.
+* Current Release: Version: 2.5; Revision 30.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -275,4 +275,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.4.29 (29 May 2023)
 
 * Documentation update.
+
+### v2.5.30 (19 July 2023)
+
+* Introduce a configuration parameter (DB Server section) to limit the number of connections created to a DB Server:
+	* max_connections
+	* When the limit is reached, and all connections in the pool are busy, additional requests will queue for a period up to the time allowed in the **timeout** setting.
 
