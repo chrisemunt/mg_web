@@ -8,7 +8,7 @@
 //       tcp_port 7777
 //    </server>
 //
-//    <location /mgweb / js >
+//    <location /mgweb/js >
 //       function web
 //       servers NodeJS
 //    </location >
