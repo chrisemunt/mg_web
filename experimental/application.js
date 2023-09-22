@@ -9,7 +9,7 @@
 //    </server>
 //
 //    <location /mgweb/js >
-//       function web
+//       function ./application.mjs
 //       servers NodeJS
 //    </location >
 //
@@ -23,20 +23,30 @@
 //
 //
 // simple test function
-function web(cgi, content, sys) {
-   let res = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n";
-   for (argc = 0; argc < cgi.length; argc++) {
-      res = res + "CGI variable " + cgi[argc].name + " : " + cgi[argc].value + "\r\n";
-   }
-   for (argc = 0; argc < sys.length; argc++) {
-      if (sys[argc].name === 'function' || sys[argc].name === 'path' || sys[argc].name === 'no') {
-         res = res + "SYS variable " + sys[argc].name + " : " + sys[argc].value + "\r\n";
-      }
-   }
-   res = res + "Request payload: " + content.toString();
-   return res;
+let handler = function(cgi, content, sys) {
+
+  console.log('*** application.mjs ****');
+  console.log('cgi:');
+  console.log(cgi);
+
+  console.log('content:');
+  console.log(content);
+
+  console.log('sys:');
+  console.log(sys);
+
+  let res = '';
+  cgi.forEach((value, name) => {
+    res = res + "CGI variable " + name + " : " + value + "\r\n";
+  });
+
+  sys.forEach((value, name) => {
+    if (name === 'function' || name === 'path' || name === 'no') {
+      res = res + "SYS variable " + name + " : " + value + "\r\n";
+    }
+  });
+  res = res + "Request payload: " + content.toString();
+  return res;
 }
 
-module.exports = {
-   web: web
-}
+export {handler};
