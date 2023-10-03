@@ -53,9 +53,15 @@
 #define MG_DEFAULT_TIMEOUT    300000
 #define MG_RBUFFER_SIZE       1024
 
-
+/*
 #define MG_API_TRACE          1
+*/
 
+/* TODO - find out why using the thread pool causes occasional SIGSEGVs
+#if defined(NGX_THREADS)
+#define MG_NGX_THREADS        1
+#endif
+*/
 
 #ifdef __cplusplus
 extern "C" {
@@ -125,7 +131,7 @@ DWORD WINAPI         mg_execute_detached_thread (LPVOID pargs);
 #else
 void *               mg_execute_detached_thread (void *pargs);
 #endif
-#if defined(NGX_THREADS)
+#if defined(MG_NGX_THREADS)
 static void          mg_execute_pool            (void *data, ngx_log_t *log);
 static void          mg_execute_pool_completion (ngx_event_t *ev);
 #endif
@@ -318,7 +324,48 @@ static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
    if (!ok && !dconf->mg_enabled) {
       return NGX_DECLINED;
    }
-     
+
+/* v2.5.31 - very simple response */
+#if 0
+{
+   ngx_int_t     rc;
+   ngx_buf_t    *b;
+   ngx_chain_t   out;
+   int clen;
+
+   /* send header */
+   clen = 9;
+   r->headers_out.status = NGX_HTTP_OK;
+   r->headers_out.content_length_n = clen;
+
+   rc = ngx_http_send_header(r);
+
+   if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
+      return rc;
+   }
+
+   /* send body */
+
+   b = ngx_calloc_buf(r->pool);
+   if (b == NULL) {
+      return NGX_ERROR;
+   }
+
+   b->last_buf = (r == r->main) ? 1 : 0;
+   b->last_in_chain = 1;
+
+   b->memory = 1;
+
+   b->pos = (u_char *) "It Works!";
+   b->last = b->pos + clen;
+
+   out.buf = b;
+   out.next = NULL;
+
+   return ngx_http_output_filter(r, &out); 
+}
+#endif
+
    pwebnginx = ngx_pcalloc(r->pool, sizeof(MGWEBNGINX));
    if (pwebnginx == NULL) {
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -327,26 +374,11 @@ static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
    ngx_http_set_ctx(r, pwebnginx, ngx_http_mg_web_module);
    pwebnginx->r = r;
 
-   pweb = (MGWEB *) ngx_pcalloc(r->pool, sizeof(MGWEB) + 128100);
-   if (pweb == NULL) {
-      return NGX_HTTP_INTERNAL_SERVER_ERROR;
-   }
-   pwebnginx->pweb = pweb;
-
-   pwebnginx->async = 1;
+   /* v2.5.31 */
+   pwebnginx->async = 0;
    strcpy(pwebnginx->mg_thread_pool, dconf->mg_thread_pool);
    pwebnginx->thread_pool.data = (u_char *) pwebnginx->mg_thread_pool;
    pwebnginx->thread_pool.len = (size_t) strlen(pwebnginx->mg_thread_pool);
-
-   pweb->pweb_server = (void *) pwebnginx;
-   pweb->input_buf.buf_addr = ((char *) pweb) + sizeof(MGWEB);
-   pweb->input_buf.buf_addr += 15;
-   pweb->input_buf.len_alloc = 128000;
-   pweb->input_buf.len_used = 0;
-
-   pweb->output_val.svalue.buf_addr = pweb->input_buf.buf_addr;
-   pweb->output_val.svalue.len_alloc = pweb->input_buf.len_alloc;
-   pweb->output_val.svalue.len_used = pweb->input_buf.len_used;
 
    pweb = mg_obtain_request_memory((void *) pwebnginx, (unsigned long) (r->headers_in.content_length_n > 0 ? r->headers_in.content_length_n : 0));
    if (pweb == NULL) {
@@ -516,7 +548,7 @@ static void mg_payload_handler(ngx_http_request_t *r)
    }
 #endif
 
-#if defined(NGX_THREADS)
+#if defined(MG_NGX_THREADS)
    if (pwebnginx->thread_pool.len > 0) {
       ngx_thread_pool_t *tp = NULL;
       ngx_thread_task_t *task = NULL;
@@ -589,7 +621,13 @@ static int mg_execute(ngx_http_request_t *r, MGWEBNGINX *pwebnginx)
    rc = mg_web_process(pweb);
 
    if (pwebnginx->output_head) {
+      /* v2.5.31 */
+/*
       pwebnginx->output_buf_last->last_buf = 1;
+*/
+      pwebnginx->output_buf_last->last_buf = (r == r->main) ? 1 : 0;
+      pwebnginx->output_buf_last->last_in_chain = 1;
+
       rc = ngx_http_output_filter(r, pwebnginx->output_head);
       ngx_http_finalize_request(r, rc);
    }
@@ -672,7 +710,7 @@ void * mg_execute_detached_thread(void *pargs)
 }
 
 
-#if defined(NGX_THREADS)
+#if defined(MG_NGX_THREADS)
 static void mg_execute_pool(void *data, ngx_log_t *log)
 {
    mg_thread_ctx *task_ctx = data;
@@ -1139,6 +1177,13 @@ int mg_check_file_type(char *mg_file_types_main, char *mg_file_types_server, cha
 
 void * mg_malloc_nginx(void *pweb_server, unsigned long size)
 {
+/*
+{
+   char buffer[256];
+   sprintf(buffer, "mg_web: mg_malloc_nginx(%lu)", size);
+   mg_log_event(&debug_log, NULL, buffer, "mg_web: trace", 0);
+}
+*/
    return ngx_pcalloc(((MGWEBNGINX *) pweb_server)->r->pool, size);
 }
 
@@ -1574,6 +1619,7 @@ __try {
    /* (i.e., filters should copy it rather than rewrite in place) */
 
    b->last_buf = 0; /* there might be more buffers in the request */
+   b->last_in_chain = 0; /* v2.5.31 */
 
    c->buf = b;
    c->next = NULL;
