@@ -104,7 +104,7 @@ else {
     offset = set_size(buffer, offset, data_len);
     buffer[offset] = cmnd;
     return (offset + 1);
-  }
+   }
 
   function block_get_size(buffer, offset, data_properties) {
     data_properties.len = get_size(buffer, offset);
@@ -139,9 +139,12 @@ else {
     let remote_address = conn.remoteAddress + ':' + conn.remotePort;  
     console.log('mg_web new worker process created pid=%d; client=%s', process.pid, remote_address);
 
-    // pretend we're an IRIS server
+    // turn the Nagle algorithm off
+    conn.setNoDelay();
+
+    // tell the web server what we are
     let offset = 0;
-    let zv = "IRIS for Windows (x86-64) 2022.3 (Build 589U) Fri Jan 6 2023 00:06:23 EST";
+    let zv = "Node.js " + process.version;
     offset = block_add_string(buffer, offset, zv, zv.length, 0, 0);
     conn.write(buffer.slice(0, offset));
 
@@ -277,7 +280,7 @@ else {
       console.log('connection closed');
     });
 
-    conn.on('error', () => {
+    conn.on('error', (err) => {
       console.log('Connection error: %s', err.message);
     });
   });

@@ -35,6 +35,8 @@ let handler = function(cgi, content, sys) {
   console.log('sys:');
   console.log(sys);
 
+  //let res = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nIt Works!\r\n";
+
   let res = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n";
   cgi.forEach((value, name) => {
     res = res + "CGI variable " + name + " : " + value + "\r\n";
