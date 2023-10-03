@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-19 July 2023, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+3 October 2023, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.5; Revision 30.
+* Current Release: Version: 2.5; Revision 31.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -282,3 +282,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 	* max_connections
 	* When the limit is reached, and all connections in the pool are busy, additional requests will queue for a period up to the time allowed in the **timeout** setting.
 
+### v2.5.31 (3 October 2023)
+
+* Correct a fault in memory management for the Nginx solution.
+	* This fault resulted in requests occasionally failing with SIGSEGV errors.
