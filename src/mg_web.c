@@ -156,6 +156,10 @@ Version 2.5.30 19 July 2023:
       max_connections
    When the limit is reached, and all connections in the pool are busy, additional requests will queue up to the time allowed in the timeout setting.
 
+Version 2.5.31 3 October 2023:
+   Correct a fault in memory management for the Nginx solution.
+   Add server types for GT.M, Node.js and Bun.
+
 */
 
 
@@ -257,7 +261,12 @@ __try {
    }
 
    if (pweb->ppath->admin) { /* v2.4.24 */
-      return mg_admin(pweb);
+      if (pweb->evented) { /* v2.5.31 */
+         return CACHE_SUCCESS;
+      }
+      else {
+         return mg_admin(pweb);
+      }
    }
 
    if (mg_system.log.log_frames) {
@@ -442,6 +451,10 @@ __try {
 
    *info = '\0';
    close_connection = 0;
+
+   if (pweb->ppath->admin && pweb->evented) { /* v2.5.31 */
+      return mg_admin(pweb);
+   }
 
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr, pweb->input_buf.len_used, 0,  DBX_DSORT_EOD, DBX_DTYPE_STR8);
    pweb->input_buf.len_used += 5;
@@ -2678,7 +2691,7 @@ __try {
       len_alloc = DBX_LS_BUFFER_ISC;
    }
 
-   pweb = (MGWEB *) mg_malloc(NULL, sizeof(MGWEB) + (len_alloc + 32), 0);
+   pweb = (MGWEB *) mg_malloc(pweb_server, sizeof(MGWEB) + (len_alloc + 32), 0); /* v2.5.31 */
    if (!pweb) {
       return NULL;
    }
@@ -2752,7 +2765,7 @@ __try {
 
    len_alloc = 128000;
 
-   pval = (DBXVAL *) mg_malloc(NULL, sizeof(DBXVAL) + (len_alloc + 32), 0);
+   pval = (DBXVAL *) mg_malloc(pweb->pweb_server, sizeof(DBXVAL) + (len_alloc + 32), 0); /* v2.5.31 */
    if (!pval) {
       return NULL;
    }
@@ -2812,11 +2825,11 @@ __try {
    pval = pweb->output_val.pnext;
    while (pval) {
       pvalnext = pval->pnext;
-      mg_free(NULL, (void *) pval, 0);
+      mg_free(pweb->pweb_server, (void *) pval, 0); /* v2.5.31 */
       pval = pvalnext; 
    }
    if (pweb->request_cookie) { /* v2.1.10 */
-      mg_free(NULL, (void *) pweb->request_cookie, 0);
+      mg_free(pweb->pweb_server, (void *) pweb->request_cookie, 0); /* v2.5.31 */
    }
 
    mg_free(pweb->pweb_server, pweb, 0);
@@ -3257,7 +3270,7 @@ __try {
    *sname = '\0';
    found = 0;
    len = 4096;
-   pweb->request_cookie = (char *) mg_malloc(NULL, len + 32, 0);
+   pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, 0); /* v2.5.31 */
    DBX_TRACE(1)
    if (!pweb->request_cookie) {
       return server_no;
@@ -3271,7 +3284,7 @@ __try {
          DBX_TRACE(4)
          mg_free(NULL, (void *) pweb->request_cookie, 0);
          len = (n + 2) * 4096;
-         pweb->request_cookie = (char *) mg_malloc(NULL, len + 32, 0);
+         pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, 0);
          if (!pweb->request_cookie) {
             break;
          }
@@ -4272,6 +4285,19 @@ __try {
          }
          else if (!strcmp(psrv->dbtype_name, "yottadb")) {
             psrv->dbtype = DBX_DBTYPE_YOTTADB;
+            psrv->max_string_size = DBX_LS_BUFFER_YDB;
+         }
+         /* v2.5.31 */
+         else if (!strcmp(psrv->dbtype_name, "gt.m") || !strcmp(psrv->dbtype_name, "gtm")) {
+            psrv->dbtype = DBX_DBTYPE_GTM;
+            psrv->max_string_size = DBX_LS_BUFFER_YDB;
+         }
+         else if (!strcmp(psrv->dbtype_name, "node.js") || !strcmp(psrv->dbtype_name, "nodejs") || !strcmp(psrv->dbtype_name, "node")) {
+            psrv->dbtype = DBX_DBTYPE_NODEJS;
+            psrv->max_string_size = DBX_LS_BUFFER_ISC;
+         }
+         else if (!strcmp(psrv->dbtype_name, "bun")) {
+            psrv->dbtype = DBX_DBTYPE_BUN;
             psrv->max_string_size = DBX_LS_BUFFER_YDB;
          }
          else {
@@ -7777,7 +7803,7 @@ int netx_tcp_connect(MGWEB *pweb, int context)
 int netx_tcp_handshake(MGWEB *pweb, int context)
 {
    int len, len1;
-   char buffer[256];
+   char buffer[2560];
    DBXCON *pcon;
 
    pcon = pweb->pcon;
@@ -7786,6 +7812,17 @@ int netx_tcp_handshake(MGWEB *pweb, int context)
    len = (int) strlen(buffer);
 
    netx_tcp_write(pweb, (unsigned char *) buffer, len);
+/* cmtjs
+   len = netx_tcp_read(pweb, (unsigned char *) buffer, 500, 10, 0);
+
+   {
+      char bufferx[256];
+      sprintf(bufferx, "netx_tcp_handshake: len=%d", len);
+      mg_log_event(pweb->plog, pweb, bufferx, "netx_tcp_handshake", -1);
+      mg_log_event(pweb->plog, pweb, buffer, "netx_tcp_handshake - data", -1);
+   }
+
+*/
 
    len = netx_tcp_read(pweb, (unsigned char *) buffer, 5, 10, 1); /* v2.1.13 */
    if (len != 5) {
@@ -7805,11 +7842,38 @@ int netx_tcp_handshake(MGWEB *pweb, int context)
       return CACHE_NOCON;
    }
 
-   if (pcon->psrv->dbtype != DBX_DBTYPE_YOTTADB) {
+
+   if (pcon->psrv->dbtype == DBX_DBTYPE_IRIS || pcon->psrv->dbtype == DBX_DBTYPE_CACHE) {
       isc_parse_zv(buffer, pcon->p_zv);
    }
-   else {
-     ydb_parse_zv(buffer, pcon->p_zv);
+   else if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB || pcon->psrv->dbtype == DBX_DBTYPE_GTM) {
+      ydb_parse_zv(buffer, pcon->p_zv);
+   }
+   else { /* v2.5.31 */
+      char *p;
+
+      pcon->p_zv->mg_version = 0;
+      pcon->p_zv->majorversion = 0;
+      pcon->p_zv->minorversion = 0;
+      pcon->p_zv->mg_build = 0;
+      pcon->p_zv->vnumber = 0;
+      p = strstr(buffer, "v");
+      if (p) {
+         pcon->p_zv->majorversion = (int) strtol(++ p, NULL, 10);
+         pcon->p_zv->mg_version = strtod(p, NULL); 
+         p = strstr(p, ".");
+         if (p) {
+            pcon->p_zv->minorversion = (int) strtol(++ p, NULL, 10);
+            p = strstr(p, ".");
+            if (p) {
+               pcon->p_zv->mg_build = (int) strtol(++ p, NULL, 10);
+            }
+         }
+      }
+/*
+      sprintf(buffer, "JavaScript engine: version=%f; major=%d; minor=%d; build=%d", pcon->p_zv->mg_version, pcon->p_zv->majorversion, pcon->p_zv->minorversion, pcon->p_zv->mg_build);
+      mg_log_event(pweb->plog, pweb, buffer, "DB Server Version", -1);
+*/
    }
 
    return 0;

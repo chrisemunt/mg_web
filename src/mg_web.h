@@ -273,6 +273,8 @@ typedef int    xc_status_t;
 #define DBX_DBTYPE_IRIS          2
 #define DBX_DBTYPE_YOTTADB       5
 #define DBX_DBTYPE_GTM           11
+#define DBX_DBTYPE_NODEJS        21
+#define DBX_DBTYPE_BUN           22
 
 #define DBX_MAXCONS              8192
 #define DBX_MAXARGS              64
