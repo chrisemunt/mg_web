@@ -27,22 +27,29 @@
 //
 
 import net from 'node:net';
-import cluster from 'node:cluster';
 import os from 'node:os';
 import process from 'node:process';
+import child_process from 'node:child_process'
 
 const cpus = os.cpus().length;
 
 let port = 7041;
+let app = "application.mjs";
+let primary = true;
+let node_path = process.argv[0];
+let mod_name = process.argv[1];
+
 if (process.argv.length > 2) {
   port = parseInt(process.argv[2]);
 }
-
+if (port === 1000000) {
+   primary = false;
+}
 if (process.argv.length > 3) {
   app = process.argv[3];
 }
 
-if (cluster.isPrimary) {
+if (primary) {
   console.log('mg_web server for Node.js %s; CPUs=%d; pid=%d;', process.version, cpus, process.pid);
 
   let server = net.createServer();    
@@ -52,8 +59,7 @@ if (cluster.isPrimary) {
     console.log('mg_web new client connection from %s', remote_address);
 
     conn.on('data', (d) => {
-      let worker = cluster.fork();
-
+      let worker = child_process.fork(mod_name, [1000000], { stdio: ['inherit', 'inherit', 'inherit', 'ipc'] });
       worker.on('message', message => {
         if (message === 'ready!') {
           worker.send(d, conn);
@@ -98,7 +104,7 @@ else {
     offset = set_size(buffer, offset, data_len);
     buffer[offset] = cmnd;
     return (offset + 1);
-  }
+   }
 
   function block_get_size(buffer, offset, data_properties) {
     data_properties.len = get_size(buffer, offset);
@@ -133,9 +139,12 @@ else {
     let remote_address = conn.remoteAddress + ':' + conn.remotePort;  
     console.log('mg_web new worker process created pid=%d; client=%s', process.pid, remote_address);
 
-    // pretend we're an IRIS server
+    // turn the Nagle algorithm off
+    conn.setNoDelay();
+
+    // tell the web server what we are
     let offset = 0;
-    let zv = "IRIS for Windows (x86-64) 2022.3 (Build 589U) Fri Jan 6 2023 00:06:23 EST";
+    let zv = "Node.js " + process.version;
     offset = block_add_string(buffer, offset, zv, zv.length, 0, 0);
     conn.write(buffer.slice(0, offset));
 
@@ -248,9 +257,15 @@ else {
         }
       }
 
-      let res = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n";
+      let res = "";
       try {
-        res += handlers.get(fun)(cgi, content, sys);
+        let fn = handlers.get(fun);
+        if (fn.constructor.name === 'AsyncFunction') {
+          res = await fn(cgi, content, sys);
+        }
+        else {
+          res = fn(cgi, content, sys);
+        }
       }
       catch(err) {
         console.log('Handler error!');
@@ -271,7 +286,7 @@ else {
       console.log('connection closed');
     });
 
-    conn.on('error', () => {
+    conn.on('error', (err) => {
       console.log('Connection error: %s', err.message);
     });
   });
