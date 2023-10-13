@@ -35,7 +35,7 @@ const cpus = os.cpus().length;
 
 let port = 7041;
 let app = "application.mjs";
-let primary = 1;
+let primary = true;
 let node_path = process.argv[0];
 let mod_name = process.argv[1];
 
@@ -43,7 +43,7 @@ if (process.argv.length > 2) {
   port = parseInt(process.argv[2]);
 }
 if (port === 1000000) {
-   primary = 0;
+   primary = false;
 }
 if (process.argv.length > 3) {
   app = process.argv[3];
@@ -259,7 +259,13 @@ else {
 
       let res = "";
       try {
-        res = handlers.get(fun)(cgi, content, sys);
+        let fn = handlers.get(fun);
+        if (fn.constructor.name === 'AsyncFunction') {
+          res = await fn(cgi, content, sys);
+        }
+        else {
+          res = fn(cgi, content, sys);
+        }
       }
       catch(err) {
         console.log('Handler error!');
