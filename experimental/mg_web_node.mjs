@@ -260,6 +260,7 @@ else {
       let res = "";
       try {
         let fn = handlers.get(fun);
+        sys.set('socket', conn);
         if (fn.constructor.name === 'AsyncFunction') {
           res = await fn(cgi, content, sys);
         }
@@ -282,9 +283,9 @@ else {
     });
 
 
-    conn.once('close', () => {
-      console.log('connection closed');
-    });
+    //conn.once('close', () => {
+    //  console.log('connection closed');
+    //});
 
     conn.on('error', (err) => {
       console.log('Connection error: %s', err.message);
