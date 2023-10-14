@@ -206,8 +206,15 @@ else {
         offset += 5;
         if (data_properties.sort === 5) {
           // CGI environment variable
-          let d = data.slice(offset, offset + len).toString().split("=");
-          cgi.set(d[0], d[1]);
+          let d = data.slice(offset, offset + len).toString();
+          if (d.startsWith('QUERY_STRING=')) {
+            d = d.split('QUERY_STRING=')[1];
+            cgi.set('QUERY_STRING', d);
+          }
+          else {
+            d = d.split("=");
+            cgi.set(d[0], d[1]);
+          }
         }
         if (data_properties.sort === 6) {
           // request payload (if any)
