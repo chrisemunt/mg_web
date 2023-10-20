@@ -52,7 +52,26 @@ if (process.argv.length > 3) {
 if (primary) {
   console.log('mg_web server for Node.js %s; CPUs=%d; pid=%d;', process.version, cpus, process.pid);
 
-  let server = net.createServer();    
+  let server = net.createServer();
+  let workers = new Map();
+
+  process.on( 'SIGINT', async function() {
+    console.log('*** CTRL & C detected: shutting down gracefully...');
+
+    if (workers.size > 0) {
+      for (const [key, worker] of workers) {
+        console.log('signalling worker ' + worker.pid + ' to stop: key = ' + key);
+        worker.send('<<stop>>');
+        workers.delete(key);
+      }
+      setTimeout(() => {
+        process.exit();
+      }, 1000);
+    }
+    else {
+      process.exit();
+    }
+  });
 
   server.on('connection', (conn) => {    
     let remote_address = conn.remoteAddress + ':' + conn.remotePort;  
@@ -60,10 +79,20 @@ if (primary) {
 
     conn.on('data', (d) => {
       let worker = child_process.fork(mod_name, [1000000], { stdio: ['inherit', 'inherit', 'inherit', 'ipc'] });
+
+      workers.set(worker.pid, worker);
+
       worker.on('message', message => {
         if (message === 'ready!') {
           worker.send(d, conn);
+          return;
         }
+
+        if (message === 'stopping') {
+          console.log('master process removing stopped worker from Map');
+          workers.delete(worker.pid);
+        }
+
       });
     });
   });
@@ -73,6 +102,17 @@ if (primary) {
   });
 }
 else {
+
+  process.on( 'SIGINT', function() {
+    console.log('*** CTRL & C detected in worker');
+  });
+
+  process.on( 'SIGTERM', function() {
+    console.log('*** SIGTERM detected in worker');
+  });
+
+  let socket;
+  const evTarget = new EventTarget();
 
   let data_properties = { len: 0, type: 0, sort: 0 };
   let buffer = new Uint8Array(2048);
@@ -135,6 +175,20 @@ else {
   }
 
   process.on('message', (dbx, conn) => {
+
+    //console.log('child process ' + process.pid + ' received:');
+    //console.log(dbx);
+
+    if (conn && !socket) socket = conn;
+
+    if (dbx === '<<stop>>') {
+      console.log('stop child process ' + process.pid);
+      evTarget.dispatchEvent(new Event('stop'));
+      setTimeout(() => {
+        process.exit();
+      }, 1000);
+      return;
+    }
 
     let remote_address = conn.remoteAddress + ':' + conn.remotePort;  
     console.log('mg_web new worker process created pid=%d; client=%s', process.pid, remote_address);
@@ -206,8 +260,15 @@ else {
         offset += 5;
         if (data_properties.sort === 5) {
           // CGI environment variable
-          let d = data.slice(offset, offset + len).toString().split("=");
-          cgi.set(d[0], d[1]);
+          let d = data.slice(offset, offset + len).toString();
+          if (d.startsWith('QUERY_STRING=')) {
+            d = d.split('QUERY_STRING=')[1];
+            cgi.set('QUERY_STRING', d);
+          }
+          else {
+            d = d.split("=");
+            cgi.set(d[0], d[1]);
+          }
         }
         if (data_properties.sort === 6) {
           // request payload (if any)
@@ -261,6 +322,7 @@ else {
       try {
         let fn = handlers.get(fun);
         sys.set('socket', conn);
+        sys.set('evTarget', evTarget);
         if (fn.constructor.name === 'AsyncFunction') {
           res = await fn(cgi, content, sys);
         }
@@ -283,9 +345,14 @@ else {
     });
 
 
-    //conn.once('close', () => {
-    //  console.log('connection closed');
-    //});
+    conn.on('close', () => {
+      console.log('connection closed');
+      process.send('stopping');
+      evTarget.dispatchEvent(new Event('stop'));
+      setTimeout(() => {
+        process.exit();
+      }, 1000);
+    });
 
     conn.on('error', (err) => {
       console.log('Connection error: %s', err.message);
