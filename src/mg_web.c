@@ -4,7 +4,7 @@
    | Description: HTTP Gateway for InterSystems Cache/IRIS and YottaDB        |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2023 MGateway Ltd                                     |
+   | Copyright (c) 2019-2024 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -159,6 +159,12 @@ Version 2.5.30 19 July 2023:
 Version 2.5.31 3 October 2023:
    Correct a fault in memory management for the Nginx solution.
    Add server types for GT.M, Node.js and Bun.
+
+Version 2.6.32 17 January 2024:
+   Improve the mechanism through which WebSocket functions are invoked.
+   Instead of embedding the WebSocket function name and path in the client-side script, a mapping must be created in the appropriate location block of the configuration.
+   For example:
+	   websocket mywebsocket.mgw websocket^webroutine
 
 */
 
@@ -3635,6 +3641,7 @@ int mg_parse_config()
    MGSRV *psrv, *psrv_prev;
    MGPATH *ppath, *ppath_prev;
    MGTLS *ptls, *ptls_prev;
+   MGWSMAP *pwsmap, *pwsmap_prev;
 
 #ifdef _WIN32
 __try {
@@ -3646,6 +3653,8 @@ __try {
    ppath_prev = NULL;
    ptls = NULL;
    ptls_prev = NULL;
+   pwsmap = NULL;
+   pwsmap_prev = NULL;
    inserver = 0;
    inpath = 0;
    intls = 0;
@@ -3793,6 +3802,8 @@ __try {
                      ppath->servers[n].psrv = NULL;
                      ppath->servers[n].exclusive = 0;
                   }
+                  ppath->pwsmap = NULL;
+                  pwsmap_prev = NULL;
                   ppath->admin = 0;
                   ppath->load_balancing = 0;
                   ppath->sa_cookie = NULL;
@@ -3940,6 +3951,25 @@ __try {
                   mg_lcase(word[0]);
                   if (!strcmp(word[0], "function")) {
                      ppath->function = word[1];
+                  }
+                  else if (!strcmp(word[0], "websocket")) { /* v2.6.32 */
+                     if (wn > 2) {
+                        pwsmap = (MGWSMAP *) mg_malloc(NULL, sizeof(MGWSMAP), 0);
+                        if (pwsmap) {
+                           pwsmap->name = word[1];
+                           pwsmap->name_len = (int) strlen(pwsmap->name);
+                           pwsmap->function = word[2];
+                           pwsmap->function_len = (int) strlen(pwsmap->function);
+                           pwsmap->pnext = NULL;
+                           if (!ppath->pwsmap) {
+                              ppath->pwsmap = pwsmap;
+                           }
+                           if (pwsmap_prev) {
+                              pwsmap_prev->pnext = pwsmap;
+                           }
+                           pwsmap_prev = pwsmap;
+                        }
+                     }
                   }
                   else if (!strcmp(word[0], "servers")) {
                      for (n = 1; n < wn; n ++) {
@@ -4242,6 +4272,7 @@ int mg_verify_config()
    MGSRV *psrv;
    MGPATH *ppath;
    MGTLS *ptls;
+   MGWSMAP *pwsmap;
 
 #ifdef _WIN32
 __try {
@@ -4437,6 +4468,15 @@ __try {
             }
             mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: location", 0);
          }
+      }
+      /* v2.6.32 */
+      pwsmap = ppath->pwsmap;
+      while (pwsmap) {
+         if (pbuf) {
+            sprintf(pbuf, "location name=%s; mapped file name=%s; function=%s;", ppath->name, pwsmap->name ? pwsmap->name : "null", pwsmap->function ? pwsmap->function : "null");
+            mg_log_event(&(mg_system.log), NULL, pbuf, "mg_web: configuration: location websocket", 0);
+         }
+         pwsmap = pwsmap->pnext;
       }
       ppath = ppath->pnext;
    }

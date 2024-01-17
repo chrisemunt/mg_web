@@ -4,7 +4,7 @@
    | Description: HTTP Gateway for InterSystems Cache/IRIS and YottaDB        |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2023 MGateway Ltd                                     |
+   | Copyright (c) 2019-2024 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -37,6 +37,7 @@ int mg_websocket_check(MGWEB *pweb)
    char *p, *pa, *pz;
    char upgrade[128], buffer[256], connection[256], wsfunction[128];
    char host[128], sec_websocket_key[256], token[256], hash[256], sec_websocket_accept[256], sec_websocket_protocol[32];
+   MGWSMAP *pwsmap;
 
    protocol_version = 0;
    upgrade_connection = 0;
@@ -142,17 +143,35 @@ int mg_websocket_check(MGWEB *pweb)
    lenu = 0;
    lenc = 0;
    len = 0;
+   pwsmap = NULL;
    for (n = 0; n < pweb->script_name_len; n ++) {
       if (pweb->script_name[n] == '/') {
          lenu = n + 1;
+         /* v2.6.32 */
+         pwsmap = pweb->ppath->pwsmap;
+         while (pwsmap) {
+            if (!strncmp(pweb->script_name + lenu, pwsmap->name, pwsmap->name_len)) {
+               lenc = pwsmap->name_len;
+               break;
+            }
+            pwsmap = pwsmap->pnext;
+         }
       }
+/*
       else if (pweb->script_name[n] == '^') {
          lenc = n;
          break;
       }
+*/
    }
+
+   if (lenc && pwsmap) {
+      strcpy(wsfunction, pwsmap->function);
+      len = pwsmap->function_len;
+   }
+/*
    if (lenc) {
-      for (n = lenu; ; n ++) {
+      for (n = lenu; n < pweb->script_name_len ; n ++) {
          if (pweb->script_name[n] == '/' || pweb->script_name[n] == '.') {
             break;
          }
@@ -160,6 +179,18 @@ int mg_websocket_check(MGWEB *pweb)
       }
       wsfunction[len] = '\0';
    }
+
+   else if (pweb->psrv && pweb->psrv->dbtype == DBX_DBTYPE_NODEJS) {
+      for (n = lenu; n < pweb->script_name_len; n ++) {
+         if (pweb->script_name[n] == '/') {
+            break;
+         }
+         wsfunction[len ++] = pweb->script_name[n];
+      }
+      wsfunction[len] = '\0';
+   }
+*/
+
    if (!len) {
       mg_log_buffer(pweb->plog, pweb, pweb->script_name, pweb->script_name_len, "Cannot find WebSocket function name in the URL", 0);
       return -1;

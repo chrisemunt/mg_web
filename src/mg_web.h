@@ -5,7 +5,7 @@
    |              and YottaDB API                                             |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2023 MGateway Ltd                                     |
+   | Copyright (c) 2019-2024 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -1112,12 +1112,22 @@ typedef struct tagMGPSRV {
    short       exclusive;
 } MGPSRV, *LPMGPSRV;
 
+/* v2.6.32 */
+typedef struct tagMGWSMAP {
+   int         name_len;
+   char        *name;
+   int         function_len;
+   char        *function;
+   struct tagMGWSMAP  *pnext;
+} MGWSMAP, *LPMGWSMAP;
+
 typedef struct tagMGPATH {
    int         cgi_max;
    int         srv_max;
    char        *name;
    int         name_len;
    char        *function;
+   MGWSMAP     *pwsmap; /* v2.6.32 */
    int         load_balancing;
    int         server_no;
    int         sa_order;
