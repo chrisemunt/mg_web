@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
 
 Chris Munt <cmunt@mgateway.com>  
-3 October 2023, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+17 January 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.5; Revision 31.
+* Current Release: Version: 2.6; Revision 32.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -104,7 +104,7 @@ Full documentation for building, deploying and using **mg\_web** will be found i
 
 ## License
 
-Copyright (c) 2019-2023 MGateway Ltd,
+Copyright (c) 2019-2024 MGateway Ltd,
 Surrey UK.                                                      
 All rights reserved.
 
@@ -286,3 +286,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 * Correct a fault in memory management for the Nginx solution.
 	* This fault resulted in requests occasionally failing with SIGSEGV errors.
+
+### v2.6.32 (17 January 2024)
+
+* Improve the mechanism through which WebSocket functions are invoked.  Instead of embedding the WebSocket function name and path in the client-side script, a mapping must be created in the appropriate location block of the configuration.  For example:
+	* websocket mywebsocket.mgw websocket^webroutine
+	* Use '/[location_path]/mywebsocket.mgw' in the client-side script.  When invoked, this URL will map to 'websocket^webroutine' on the DB Server.
