@@ -5,7 +5,7 @@
 //   | Description: A Node.js server for mg_web                                 |
 //   | Author:      Chris Munt cmunt@mgateway.com                               |
 //   |                         chris.e.munt@gmail.com                           |
-//   | Copyright(c) 2023 - 2023 MGateway Ltd                                    |
+//   | Copyright(c) 2023 - 2024 MGateway Ltd                                    |
 //   | Surrey UK.                                                               |
 //   | All rights reserved.                                                     |
 //   |                                                                          |
@@ -73,11 +73,40 @@ if (primary) {
   });
 }
 else {
+  class websocket {
+    conn;
+    websocket_connection;
+    client;
+
+    init(sys, binary, options) {
+      let buffer = new Uint8Array(256);
+      let offset = 0;
+      let res = "HTTP/2 200 OK\r\nBinary: " + binary + "\r\n\r\n";
+      let no = sys.get("no");
+      offset = block_add_size(buffer, offset, res.length + 5, 0, 0);
+      offset = block_add_size(buffer, offset, no, 0, 0);
+      for (let i = 0; i < res.length; i++) {
+        buffer[offset++] = res.charCodeAt(i);
+      }
+      this.conn.write(buffer.slice(0, offset), 'binary');
+      return "";
+    }
+
+    write(data) {
+      this.conn.write(data);
+    }
+
+    close() {
+      // TODO: close the websocket
+    }
+  }
 
   let data_properties = { len: 0, type: 0, sort: 0 };
   let buffer = new Uint8Array(2048);
   let handlers = new Map();
-
+  let ws = new websocket();
+  ws.websocket_connection = false;
+  
   function block_add_string(buffer, offset, data, data_len, data_sort, data_type) {
     offset = block_add_size(buffer, offset, data_len, data_sort, data_type);
     for (let i = 0; i < data_len; i++) {
@@ -168,6 +197,7 @@ else {
       let doffset = 0;
       let dlen = 0;
       let fun = "";
+      let wsfun = "";
       let ctx = "";
       let param = "";
       for (let argc = 0; argc < 10; argc++) {
@@ -196,7 +226,7 @@ else {
           break;
         }
       }
-      //console.log('fun=%s; ctx=%s; param=%s;', fun, ctx, param);
+      //console.log('fun=%s; ctx=%s; param=%s; websocket_connection=%d', fun, ctx, param, websocket_connection);
 
       // unpack HTTP request data into cgi array, sys array and content (request payload)
       offset = doffset;
@@ -230,6 +260,9 @@ else {
           else if (d[0] === "function") {
             fun = d[1];
           }
+          else if (d[0] === "wsfunction") {
+            wsfun = d[1];
+          }
           sys.set(d[0], d[1]);
         }
         offset += len;
@@ -237,56 +270,93 @@ else {
           break;
         }
       }
-
-      // notify mg_web of data framing protocol in use for response
-      offset = 0;
-      offset = add_head(buffer, offset, 0, 0);
-      offset = add_head(buffer, offset, request_no, 1);
-      conn.write(buffer.slice(0, offset), 'binary');
-
-      // ******* call-out to application - START *******
-      // CGI variables in 'cgi' array; system variables in 'sys' array; request payload in 'content'
-      // generate a resonse in variable 'res'
-
-      if (!handlers.has(fun)) {
-        try {
-          let {handler} = await import(fun);
-          handlers.set(fun, handler);
+      // websocket client data
+      if (ws.websocket_connection === true) {
+        // callout to application read method
+        ws.client.read(ws, data);
+      }
+      // websocket initialization
+      else if (wsfun != "") {
+        if (!handlers.has(wsfun)) {
+          try {
+            let { handler } = await import(wsfun);
+            handlers.set(wsfun, handler);
+          }
+          catch (err) {
+            console.log('Unable to load websocket handler module');
+            console.log(err);
+          }
         }
-        catch(err) {
-          console.log('Unable to load handler module');
+        let res = "";
+        ws.conn = conn;
+        ws.websocket_connection = true;
+        try {
+          let fn = handlers.get(wsfun);
+          sys.set('socket', conn);
+          if (fn.constructor.name === 'AsyncFunction') {
+            res = await fn(ws, cgi, content, sys);
+          }
+          else {
+            res = fn(ws, cgi, content, sys);
+          }
+        }
+        catch (err) {
+          console.log('Handler error!');
+          console.log(err);
+        }
+      }
+      // regular HTTP request
+      else {
+        // notify mg_web of data framing protocol in use for response
+        offset = 0;
+        offset = add_head(buffer, offset, 0, 0);
+        offset = add_head(buffer, offset, request_no, 1);
+        conn.write(buffer.slice(0, offset), 'binary');
+
+        // ******* call-out to application - START *******
+        // CGI variables in 'cgi' array; system variables in 'sys' array; request payload in 'content'
+        // generate a resonse in variable 'res'
+
+        if (!handlers.has(fun)) {
+          try {
+            let { handler } = await import(fun);
+            handlers.set(fun, handler);
+          }
+          catch (err) {
+            console.log('Unable to load handler module');
+            console.log(err);
+            res = "HTTP/1.1 400 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n";
+            offset = 0;
+            offset = block_add_chunk(buffer, offset, res, res.length);
+            offset = set_term(buffer, offset);
+            conn.write(buffer.slice(0, offset), 'binary');
+          }
+        }
+        // http://localhost/wsjs.html
+        let res = "";
+        try {
+          let fn = handlers.get(fun);
+          sys.set('socket', conn);
+          if (fn.constructor.name === 'AsyncFunction') {
+            res = await fn(cgi, content, sys);
+          }
+          else {
+            res = fn(cgi, content, sys);
+          }
+        }
+        catch (err) {
+          console.log('Handler error!');
           console.log(err);
           res = "HTTP/1.1 400 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n";
-          offset = 0;
-          offset = block_add_chunk(buffer, offset, res, res.length);
-          offset = set_term(buffer, offset);
-          conn.write(buffer.slice(0,offset), 'binary');
         }
-      }
 
-      let res = "";
-      try {
-        let fn = handlers.get(fun);
-        sys.set('socket', conn);
-        if (fn.constructor.name === 'AsyncFunction') {
-          res = await fn(cgi, content, sys);
-        }
-        else {
-          res = fn(cgi, content, sys);
-        }
-      }
-      catch(err) {
-        console.log('Handler error!');
-        console.log(err);
-        res = "HTTP/1.1 400 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n";
-      }
+        // ******* call-out to application - END *******
 
-      // ******* call-out to application - END *******
-
-      offset = 0;
-      offset = block_add_chunk(buffer, offset, res, res.length);
-      offset = set_term(buffer, offset);
-      conn.write(buffer.slice(0,offset), 'binary');
+        offset = 0;
+        offset = block_add_chunk(buffer, offset, res, res.length);
+        offset = set_term(buffer, offset);
+        conn.write(buffer.slice(0, offset), 'binary');
+      }
     });
 
 
