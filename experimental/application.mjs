@@ -23,7 +23,10 @@
 //
 //
 // simple test function
-let handler = function(cgi, content, sys) {
+let handler = function(web_server, cgi, content, sys) {
+
+  // applications can either formulate a complete response and return from this function with that
+  // or use the 'web_server.write(data)' method to stream response data back to the web server tier
 
   console.log('*** application.mjs ****');
   console.log('cgi:');
@@ -48,6 +51,18 @@ let handler = function(cgi, content, sys) {
     }
   });
   res = res + "Request payload: " + content.toString();
+
+  // write out what we have so far
+  web_server.write(res);
+
+  // stream a series of messages back to the client
+  for (let i = 0; i < 10; i++) {
+    res = res + "\r\nStreaming content back to the web server - line number: " + i;
+    web_server.write(res);
+  }
+
+  // return with a final message
+  res = "\r\n*** The End ***\r\n";
   return res;
 }
 

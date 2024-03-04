@@ -33,6 +33,8 @@ import child_process from 'node:child_process'
 
 const cpus = os.cpus().length;
 
+const MGWEB_BUFFER_SIZE = 3641145; // or 32768
+
 let port = 7041;
 let app = "application.mjs";
 let primary = true;
@@ -52,7 +54,26 @@ if (process.argv.length > 3) {
 if (primary) {
   console.log('mg_web server for Node.js %s; CPUs=%d; pid=%d;', process.version, cpus, process.pid);
 
-  let server = net.createServer();    
+  let server = net.createServer();
+  let workers = new Map();
+
+  process.on( 'SIGINT', async function() {
+    console.log('*** CTRL & C detected: shutting down gracefully...');
+
+    if (workers.size > 0) {
+      for (const [key, worker] of workers) {
+        console.log('signalling worker ' + worker.pid + ' to stop: key = ' + key);
+        worker.send('<<stop>>');
+        workers.delete(key);
+      }
+      setTimeout(() => {
+        process.exit();
+      }, 1000);
+    }
+    else {
+      process.exit();
+    }
+  });
 
   server.on('connection', (conn) => {    
     let remote_address = conn.remoteAddress + ':' + conn.remotePort;  
@@ -60,10 +81,20 @@ if (primary) {
 
     conn.on('data', (d) => {
       let worker = child_process.fork(mod_name, [1000000], { stdio: ['inherit', 'inherit', 'inherit', 'ipc'] });
+
+      workers.set(worker.pid, worker);
+
       worker.on('message', message => {
         if (message === 'ready!') {
           worker.send(d, conn);
+          return;
         }
+
+        if (message === 'stopping') {
+          console.log('master process removing stopped worker from Map');
+          workers.delete(worker.pid);
+        }
+
       });
     });
   });
@@ -73,6 +104,26 @@ if (primary) {
   });
 }
 else {
+
+  class webserver {
+    conn;
+    stream_mode;
+    request_no;
+    buffer;
+
+    stream(sys, binary, options) {
+      this.stream_mode = 1;
+      return "";
+    }
+
+    write(data) {
+      let offset = 0;
+      offset = set_size(this.buffer, offset, data.length);
+      this.conn.write(this.buffer.slice(0, offset), 'binary');
+      this.conn.write(data);
+    }
+  }
+
   class websocket {
     conn;
     websocket_connection;
@@ -101,9 +152,21 @@ else {
     }
   }
 
+  process.on( 'SIGINT', function() {
+    console.log('*** CTRL & C detected in worker');
+  });
+
+  process.on( 'SIGTERM', function() {
+    console.log('*** SIGTERM detected in worker');
+  });
+
+  const evTarget = new EventTarget();
+
   let data_properties = { len: 0, type: 0, sort: 0 };
-  let buffer = new Uint8Array(2048);
   let handlers = new Map();
+  let wsrv = new webserver();
+  wsrv.buffer = new Uint8Array(MGWEB_BUFFER_SIZE);
+  wsrv.stream_mode = 0;
   let ws = new websocket();
   ws.websocket_connection = false;
   
@@ -165,6 +228,15 @@ else {
 
   process.on('message', (dbx, conn) => {
 
+    if (dbx === '<<stop>>') {
+      console.log('stop child process ' + process.pid);
+      evTarget.dispatchEvent(new Event('stop'));
+      setTimeout(() => {
+        process.exit();
+      }, 1000);
+      return;
+    }
+
     let remote_address = conn.remoteAddress + ':' + conn.remotePort;  
     console.log('mg_web new worker process created pid=%d; client=%s', process.pid, remote_address);
 
@@ -172,10 +244,11 @@ else {
     conn.setNoDelay();
 
     // tell the web server what we are
+    wsrv.conn = conn;
     let offset = 0;
     let zv = "Node.js " + process.version;
-    offset = block_add_string(buffer, offset, zv, zv.length, 0, 0);
-    conn.write(buffer.slice(0, offset));
+    offset = block_add_string(wsrv.buffer, offset, zv, zv.length, 0, 0);
+    conn.write(wsrv.buffer.slice(0, offset));
 
     conn.on('data', async (data) => {
       let offset = 0;
@@ -293,6 +366,7 @@ else {
         try {
           let fn = handlers.get(wsfun);
           sys.set('socket', conn);
+          sys.set('evTarget', evTarget);
           if (fn.constructor.name === 'AsyncFunction') {
             res = await fn(ws, cgi, content, sys);
           }
@@ -309,9 +383,9 @@ else {
       else {
         // notify mg_web of data framing protocol in use for response
         offset = 0;
-        offset = add_head(buffer, offset, 0, 0);
-        offset = add_head(buffer, offset, request_no, 1);
-        conn.write(buffer.slice(0, offset), 'binary');
+        offset = add_head(wsrv.buffer, offset, 0, 0);
+        offset = add_head(wsrv.buffer, offset, request_no, 1);
+        conn.write(wsrv.buffer.slice(0, offset), 'binary');
 
         // ******* call-out to application - START *******
         // CGI variables in 'cgi' array; system variables in 'sys' array; request payload in 'content'
@@ -327,9 +401,9 @@ else {
             console.log(err);
             res = "HTTP/1.1 400 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n";
             offset = 0;
-            offset = block_add_chunk(buffer, offset, res, res.length);
-            offset = set_term(buffer, offset);
-            conn.write(buffer.slice(0, offset), 'binary');
+            offset = block_add_chunk(wsrv.buffer, offset, res, res.length);
+            offset = set_term(wsrv.buffer, offset);
+            conn.write(wsrv.buffer.slice(0, offset), 'binary');
           }
         }
         // http://localhost/wsjs.html
@@ -337,11 +411,12 @@ else {
         try {
           let fn = handlers.get(fun);
           sys.set('socket', conn);
+          sys.set('evTarget', evTarget);
           if (fn.constructor.name === 'AsyncFunction') {
-            res = await fn(cgi, content, sys);
+            res = await fn(wsrv, cgi, content, sys);
           }
           else {
-            res = fn(cgi, content, sys);
+            res = fn(wsrv, cgi, content, sys);
           }
         }
         catch (err) {
@@ -353,9 +428,11 @@ else {
         // ******* call-out to application - END *******
 
         offset = 0;
-        offset = block_add_chunk(buffer, offset, res, res.length);
-        offset = set_term(buffer, offset);
-        conn.write(buffer.slice(0, offset), 'binary');
+        if (res.length > 0) {
+          offset = block_add_chunk(wsrv.buffer, offset, res, res.length);
+        }
+        offset = set_term(wsrv.buffer, offset);
+        conn.write(wsrv.buffer.slice(0, offset), 'binary');
       }
     });
 
@@ -363,6 +440,15 @@ else {
     //conn.once('close', () => {
     //  console.log('connection closed');
     //});
+
+    conn.on('close', () => {
+      console.log('connection closed');
+      process.send('stopping');
+      evTarget.dispatchEvent(new Event('stop'));
+      setTimeout(() => {
+        process.exit();
+      }, 2000);
+    });
 
     conn.on('error', (err) => {
       console.log('Connection error: %s', err.message);
