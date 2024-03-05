@@ -57,7 +57,7 @@ let handler = function(web_server, cgi, content, sys) {
 
   // stream a series of messages back to the client
   for (let i = 0; i < 10; i++) {
-    res = res + "\r\nStreaming content back to the web server - line number: " + i;
+    res = "\r\nStreaming content back to the web server - line number: " + i;
     web_server.write(res);
   }
 
