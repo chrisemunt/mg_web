@@ -1,18 +1,22 @@
 # mg_web
 
-A High speed web server extension for InterSystems Cache/IRIS and YottaDB.
+A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-17 January 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+8 April 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
 * Current Release: Version: 2.6; Revision 32.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
 
-**mg\_web** provides a high-performance minimalistic interface between three popular web servers ( **Microsoft IIS**, **Apache** and **Nginx** ) and M-like DB Servers ( **YottaDB**, **InterSystems IRIS** and **Cache** ).  It is compliant with HTTP version 1.1 and 2.0 and WebSockets are supported.  **mg\_web** can connect to a local DB Server via its high-performance API or to local or remote DB Servers via the network.
+**mg\_web** provides a high-performance minimalistic interface between three popular web servers ( **Microsoft IIS**, **Apache** and **Nginx** ) and a choice of either M-like DB Servers ( **YottaDB**, **InterSystems IRIS** and **Cache** ) or JavaScript.
 
 A longer read on the rationale behind **mg\_web** can be found [here](./why_mg_web.md).  This document was prepared with my colleague Rob Tweed.  Rob has many years' experience in creating and using web application development frameworks.
+
+For those wishing to use **mg\_web** with JavaScript, the essential components can be found in the **mg\_web\_js** repository [here](https://github.com/chrisemunt/mg_web_js/blob/master/README.md).  A complete library of documentation setting out the rationale for using **mg\_web** with JavaScript can be found [here](https://github.com/robtweed/mg-showcase/blob/master/MGWEB.md).  You will also find some fairly staggering benchmark results together with a number of Docker containers showcasing what the **mg\_web** line of products can do.
+
+**mg\_web** is compliant with HTTP version 1.1 and 2.0 and WebSockets are supported.  **mg\_web** can connect to a local DB Server via its high-performance API or to local or remote DB Servers via the network.
 
 Full documentation for installing and configuring **mg\_web** can be found [here](https://github.com/chrisemunt/mg_web/blob/master/doc/mg_web.pdf).
 
@@ -31,16 +35,16 @@ A simple 'Hello World' function would look something like the following pseudo-c
        DBServerFunction(CGI, Content, System)
        {
           // Create HTTP response headers
-          Response = ”HTTP/1.1 200 OK” + crlf
-          Response = Response + ”Content-type: text/html” + crlf
+          Response = "HTTP/1.1 200 OK" + crlf
+          Response = Response + "Content-type: text/html" + crlf
           Response = Response + crlf
           //
           // Add the HTML content
-          Response = Response + ”<html>" + crlf
-          Response = Response + ”<head><title>” + crlf
-          Response = Response + ”Hello World” + crlf
-          Response = Response + ”</title></head>” + crlf
-          Response = Response + ”<h1>Hello World</h1>” + crlf
+          Response = Response + "<html>" + crlf
+          Response = Response + "<head><title>" + crlf
+          Response = Response + "Hello World" + crlf
+          Response = Response + "</title></head>" + crlf
+          Response = Response + "<h1>Hello World</h1>" + crlf
           return Response
        }
 
@@ -51,16 +55,16 @@ A simple 'Hello World' function would look something like the following pseudo-c
           stream = startstream(ByRef System)
 
           // Create HTTP response headers
-          Write ”HTTP/1.1 200 OK” + crlf
-          Write ”Content-type: text/html” + crlf
+          Write "HTTP/1.1 200 OK" + crlf
+          Write "Content-type: text/html" + crlf
           Write crlf
           //
           // Add the HTML content
-          Write ”<html>" + crlf
-          Write ”<head><title>” + crlf
-          Write ”Hello World” + crlf
-          Write ”</title></head>” + crlf
-          Write ”<h1>Hello World</h1>” + crlf
+          Write "<html>" + crlf
+          Write "<head><title>" + crlf
+          Write "Hello World" + crlf
+          Write "</title></head>" + crlf
+          Write "<h1>Hello World</h1>" + crlf
           return stream
        }
 
@@ -69,6 +73,8 @@ In production, the above functions would, of course, be crafted in the scripting
 ## Prerequisites
 
 * A supported web server.  Currently **mg\_web** supports **Microsoft IIS**, **Apache** and **Nginx**.
+
+* Node.js version 20 (or later) if JavaScript is used.
 
 * A database. InterSystems **Cache/IRIS** or **YottaDB** (or similar M DB Server):
 
