@@ -509,7 +509,7 @@ __try {
       while (pcon) {
          if (pcon->psrv == psrv) {
             no_connections ++;
-            no_requests += psrv->no_requests;
+            no_requests += pcon->no_requests;
          }
          pcon = pcon->pnext;
       }
