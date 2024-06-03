@@ -166,6 +166,16 @@ Version 2.6.32 17 January 2024:
    For example:
 	   websocket mywebsocket.mgw websocket^webroutine
 
+Version 2.7.33 3 June 2024:
+   Introduce support for Server-Sent Events (SSE).
+      Dependent on DB SuperServer v4.5.32.
+   Ensure that the 'administrator: off' configuration setting is properly honoured.
+   Return a HTTP status code of '504 Gateway Timeout' if a request to the DB Server times-out.
+      Previous versions would return '500 Internal Server Error' on response timeout.
+      Custom error form defined in: custompage_dbserver_timeout.
+   Correct a warning that lead to compiler errors on ARM64 (Raspberry Pi) platforms.
+      error: pointer 'fp' used after 'fclose' [-Werror=use-after-free] n = fcntl(fileno(fp), F_SETLK, &lock);
+
 */
 
 
@@ -180,7 +190,7 @@ Version 2.6.32 17 January 2024:
 extern int errno;
 #endif
 
-MGSYS                mg_system         = {0, 0, 0, 0, 0, 0, "", "", "", "", NULL, NULL, NULL, NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, 0, 0, "", ""}};
+MGSYS                mg_system         = {0, 0, 0, 0, 0, 0, "", "", "", "", NULL, NULL, NULL, NULL, NULL, NULL, "", {NULL}, {"", "", "", 0, 0, 0, 0, 0, 0, 0, 0, "", ""}};
 static NETXSOCK      netx_so           = {0, 0, 0, 0, 0, 0, 0, {'\0'}};
 DBXCON *             mg_connection     = NULL;
 
@@ -254,6 +264,31 @@ __try {
    rc = mg_get_all_cgi_variables(pweb);
    DBX_TRACE(3)
    rc = mg_get_path_configuration(pweb);
+
+#if 0
+   if (pweb->sse && !pweb->evented) { /* v2.7.33 sse */
+      int n;
+      char buffer[256];
+
+      pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
+      pweb->response_content = buffer;
+      strcpy(pweb->response_headers, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n");
+      mg_submit_headers(pweb);
+  
+      for (n = 0; n < 7; n ++) {
+         sprintf(pweb->response_content, "data: line=%d; time=%lu\r\n\r\n", n, (unsigned long) time(NULL));
+         pweb->response_clen = (int) strlen(pweb->response_content);
+         mg_log_event(pweb->plog, pweb, pweb->response_content, "SSE", 0);
+         mg_client_write_now(pweb, (unsigned char *) pweb->response_content, (int) pweb->response_clen);
+#if defined(_WIN32)
+         Sleep(7000);
+#else
+         sleep(7);
+#endif
+      }
+      return CACHE_SUCCESS;
+   }
+#endif
 
    /* v2.4.24 */
    DBX_TRACE(4)
@@ -368,6 +403,16 @@ __try {
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBSYS, DBX_DTYPE_STR);
    pweb->input_buf.len_used += (len + 5);
 
+   if (pweb->sse) { /* v2.7.33 */
+      strcpy(buffer, "sse=1");
+      len = 5;
+      p = (unsigned char *) (pweb->input_buf.buf_addr + pweb->input_buf.len_used + 5);
+      strcpy((char *) p, buffer);
+      pweb->mode = (char *) (p + 5);
+      mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBSYS, DBX_DTYPE_STR);
+      pweb->input_buf.len_used += (len + 5);
+   }
+
    DBX_TRACE(7)
    rc = mg_websocket_check(pweb);
 
@@ -446,7 +491,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 int mg_web_process(MGWEB *pweb)
 {
    DBX_TRACE_INIT(0)
-   int rc, len, get, get1, close_connection, failover_no;
+   int rc, len, len1, get, get1, close_connection, failover_no;
    unsigned char *p;
    char buffer[256], info[256];
    DBXVAL *pval;
@@ -461,6 +506,38 @@ __try {
    if (pweb->ppath->admin && pweb->evented) { /* v2.5.31 */
       return mg_admin(pweb);
    }
+
+#if 0
+   if (pweb->sse && pweb->evented) { /* v2.7.33 sse */
+      int n;
+      char buffer[256];
+
+      pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
+      pweb->response_content = buffer;
+      strcpy(pweb->response_headers, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n");
+
+      mg_submit_headers(pweb);
+  
+      for (n = 0; n < 7; n ++) {
+         sprintf(pweb->response_content + 4, "data: (evented) line=%d; time=%lu\r\n\r\n", n, (unsigned long) time(NULL));
+         pweb->response_clen = (int) strlen(pweb->response_content + 4);
+         sprintf(pweb->response_content, "%x", pweb->response_clen);
+         pweb->response_content[2] = '\r';
+         pweb->response_content[3] = '\n';
+         strcat(pweb->response_content, "\r\n");
+
+         mg_log_buffer(pweb->plog, pweb, pweb->response_content, pweb->response_clen + 6, "SSE", 0);
+         mg_client_write_now(pweb, (unsigned char *) pweb->response_content, (int) pweb->response_clen + 6);
+#if defined(_WIN32)
+         Sleep(7000);
+#else
+         sleep(7);
+#endif
+      }
+      mg_client_write_now(pweb, (unsigned char *) "0\r\n\r\n", (int) 5);
+      return CACHE_SUCCESS;
+   }
+#endif
 
    mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr, pweb->input_buf.len_used, 0,  DBX_DSORT_EOD, DBX_DTYPE_STR8);
    pweb->input_buf.len_used += 5;
@@ -564,8 +641,12 @@ mg_web_process_failover:
       }
 
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
-      mg_web_http_error(pweb, 503, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
-
+      if (rc == NETX_READ_TIMEOUT) { /* v2.7.33 */
+         mg_web_http_error(pweb, 504, MG_CUSTOMPAGE_DBSERVER_TIMEOUT);
+      }
+      else {
+         mg_web_http_error(pweb, 503, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
+      }
       MG_LOG_RESPONSE_HEADER(pweb);
       mg_submit_headers(pweb);
       return 0;
@@ -604,6 +685,7 @@ mg_web_process_failover:
    DBX_TRACE(24)
    rc = mg_web_execute(pweb);
 
+   /* v2.7.33 */
 /*
    {
       char bufferx[1024];
@@ -611,6 +693,7 @@ mg_web_process_failover:
       mg_log_buffer(pweb->plog, pweb, pweb->output_val.svalue.buf_addr + 5, pweb->output_val.svalue.len_used - 5, bufferx, 0);
    }
 */
+
    DBX_TRACE(30)
    get = 0;
    if (rc == CACHE_SUCCESS) {
@@ -646,10 +729,11 @@ mg_web_process_failover:
          }
       }
 
+      /* v2.7.33 */
 /*
       {
          char bufferx[1024];
-         sprintf(bufferx, "HTTP Response (raw headers): len_used=%d; alloc=%d; content-length=%d; headers_len=%d; get=%d;", pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, pweb->response_clen, pweb->response_headers_len, get);
+         sprintf(bufferx, "HTTP Response (raw headers): len_used=%d; alloc=%d; content-length=%d; headers_len=%d; get=%d; pweb->wserver_chunks_response=%d", pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, pweb->response_clen, pweb->response_headers_len, get, pweb->wserver_chunks_response);
          mg_log_buffer(pweb->plog, pweb, (char *) pweb->response_headers, (int) pweb->response_headers_len, bufferx, 0);
       }
 */
@@ -674,25 +758,43 @@ mg_web_process_failover:
          pweb->response_headers_len += len;
       }
 
-      if (pweb->response_clen_server >= 0) { /* DB server supplied content length */
-         pweb->wserver_chunks_response = 1; /* Effectively turn off chunking */
-         strcpy(pweb->response_headers + pweb->response_headers_len, "\r\n\r\n");
-         pweb->response_headers_len += 4;
-      }
-      else {
-         if (pweb->response_streamed && pweb->response_chunked && pweb->response_remaining > 0) {
-            if (pweb->wserver_chunks_response == 0)
-               strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
-            else
-               strcpy(buffer, "\r\n\r\n");
+      if (pweb->sse) { /* v2.7.33 */
+         pweb->wserver_chunks_response = 1; /* Effectively turn off chunking - let web server handle response framing */
+         if (!pweb->response_content_type) {
+            strcpy(buffer, "\r\nContent-Type: text/event-stream");
+            len = (int) strlen(buffer);
+            strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
+            pweb->response_headers_len += len; 
          }
-         else {
-            pweb->response_streamed = 0;
-            sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
-         }
+         if (pweb->wserver_chunks_response == 0)
+            strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
+         else
+            strcpy(buffer, "\r\n\r\n");
          len = (int) strlen(buffer);
          strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
          pweb->response_headers_len += len;
+      }
+      else {
+         if (pweb->response_clen_server >= 0) { /* DB server supplied content length */
+            pweb->wserver_chunks_response = 1; /* Effectively turn off chunking */
+            strcpy(pweb->response_headers + pweb->response_headers_len, "\r\n\r\n");
+            pweb->response_headers_len += 4;
+         }
+         else {
+            if (pweb->response_streamed && pweb->response_chunked && pweb->response_remaining > 0) {
+               if (pweb->wserver_chunks_response == 0)
+                  strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
+               else
+                  strcpy(buffer, "\r\n\r\n");
+            }
+            else {
+               pweb->response_streamed = 0;
+               sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
+            }
+            len = (int) strlen(buffer);
+            strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
+            pweb->response_headers_len += len;
+         }
       }
    }
    else { /* v2.1.13 */
@@ -739,7 +841,13 @@ mg_web_process_failover:
             mg_log_event(&(mg_system.log), pweb, pweb->error, "mg_web: error", 0);
          }
       }
-      mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
+      pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
+      if (rc == NETX_READ_TIMEOUT) { /* v2.7.33 */
+         mg_web_http_error(pweb, 504, MG_CUSTOMPAGE_DBSERVER_TIMEOUT);
+      }
+      else {
+         mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
+      }
       get = pweb->response_clen;
       pweb->response_remaining = 0;
       if (pweb->pcon->net_connection) {
@@ -765,8 +873,65 @@ mg_web_process_failover:
    }
 
    DBX_TRACE(70)
+
    mg_submit_headers(pweb);
    DBX_TRACE(71)
+
+   if (pweb->sse) { /* v2.7.33 */
+
+      p = (unsigned char *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + pweb->response_headers_len + 6));
+      len = (pweb->output_val.svalue.len_alloc - (pweb->output_val.svalue.len_used + pweb->response_headers_len + 6));
+
+      while (1) {
+         rc = netx_tcp_read(pweb, (unsigned char *) p, len, 86400, 0);
+/*
+         {
+            char bufferx[256];
+            sprintf(bufferx, "SSE Data: rc=%d; len=%d;", rc, len);
+            mg_log_buffer(pweb->plog, pweb, p, (rc > 0 ? rc : 0), bufferx, 0);
+         }
+*/
+         if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
+            break;
+         }
+         if (pweb->wstype == MG_WS_NGINX) {
+            sprintf(buffer, "%x", rc);
+            len1 = (int) strlen(buffer);
+            p -= (len1 + 2);
+            rc += (len1 + 2);
+            strncpy((char *) p, buffer, len1);
+            *(p + len1) = '\r';
+            *(p + (len1 + 1)) = '\n';
+            *(p + rc) = '\r';
+            *(p + (rc + 1)) = '\n';
+            rc += 2;
+            /* mg_log_buffer(pweb->plog, pweb, (char *) p, rc, "SSE Data (Chunked)", 0); */
+            mg_client_write_now(pweb, (unsigned char *) p, (int) rc);
+            p += (len1 + 2);
+         }
+         else {
+            mg_client_write_now(pweb, (unsigned char *) p, (int) rc);
+         }
+      }
+
+      if (pweb->wstype == MG_WS_NGINX) {
+         mg_client_write_now(pweb, (unsigned char *) "0\r\n\r\n", (int) 5);
+      }
+
+      DBX_TRACE(90)
+      mg_cleanup(pweb);
+      DBX_TRACE(91)
+      if (pweb->pcon) {
+         pweb->pcon->no_requests ++;
+      }
+      close_connection = 1;
+      mg_release_connection(pweb, close_connection);
+/*
+      mg_log_event(pweb->plog, pweb, "*** SSE connection closed ***", "SSE", 0);
+*/
+      return CACHE_SUCCESS;
+   }
+
    if (get) {
       if (pweb->response_streamed) {
          if (pweb->wserver_chunks_response == 0) {
@@ -897,6 +1062,9 @@ __try {
 #endif
 
    pweb->response_clen_server = -1;
+   pweb->response_content_type = NULL; /* v2.7.33 */
+   pweb->response_cache_control = NULL;
+   pweb->response_connection = NULL;
 
    pn = pweb->response_headers;
    while (pn && *pn) {
@@ -924,6 +1092,15 @@ __try {
             if (strstr(head, "content-length")) {
                pweb->response_clen_server = (int) strtol(pv, NULL, 10);
             }
+            else if (strstr(head, "content-type")) { /* v2.7.33 */
+               pweb->response_content_type = pn;
+            }
+            else if (strstr(head, "cache-control")) {
+               pweb->response_cache_control = pn;
+            }
+            else if (strstr(head, "connection")) {
+               pweb->response_connection = pn;
+            }
          }
          *ps = ':';
       }
@@ -942,6 +1119,7 @@ __try {
       mg_log_event(pweb->plog, pweb, bufferx, "Content Length from Server", 0);
    }
 */
+
    return CACHE_SUCCESS;
 
 #ifdef _WIN32
@@ -1017,6 +1195,16 @@ __try {
       DBX_TRACE(10)
       memcpy((void *) pweb->mode, (void *) "tcp", (size_t) 3);
       rc = netx_tcp_command(pweb, DBX_CMND_FUNCTION, 0);
+
+/* v2.7.33 */
+/*
+      {
+         char bufferx[64];
+         sprintf(bufferx, "netx_tcp_command: rc=%d;", rc);
+         mg_log_event(pweb->plog, pweb, bufferx, "Trace", 0);
+      }
+*/
+
    }
    else if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
 
@@ -1186,9 +1374,16 @@ __try {
    DBX_TRACE(50)
 
    if (rc != CACHE_SUCCESS) {
-      rc = CACHE_NOCON;
-      if (!pweb->error[0]) {
-         strcpy(pweb->error, "Database connectivity error");
+      if (rc == NETX_READ_TIMEOUT) { /* v2.7.33 */
+         if (!pweb->error[0]) {
+            strcpy(pweb->error, "TCP Request Timeout");
+         }
+      }
+      else {
+         rc = CACHE_NOCON;
+         if (!pweb->error[0]) {
+            strcpy(pweb->error, "Database connectivity error");
+         }
       }
       goto mg_web_execute_exit;
    }
@@ -1589,6 +1784,8 @@ __try {
          custompage_url =  mg_system.custompage_dbserver_busy;
       else if (custompage == MG_CUSTOMPAGE_DBSERVER_DISABLED && mg_system.custompage_dbserver_disabled)
          custompage_url =  mg_system.custompage_dbserver_disabled;
+      else if (custompage == MG_CUSTOMPAGE_DBSERVER_TIMEOUT && mg_system.custompage_dbserver_timeout) /* v2.7.33 */
+         custompage_url =  mg_system.custompage_dbserver_timeout;
 
       if (custompage_url) {
          if (pweb->request_method && !strcmp(pweb->request_method, "POST"))
@@ -1600,7 +1797,16 @@ __try {
       }
    }
 
-   sprintf(pweb->response_headers, "HTTP/1.1 %d Internal Server Error\r\nConnection: close", http_status_code);
+   /* v2.7.33 504 Gateway Timeout (wating for the DB Server) ; 408 Request Timeout (wating for the client) */
+   if (http_status_code == 504) {
+      sprintf(pweb->response_headers, "HTTP/1.1 %d Gateway Timeout\r\nConnection: close", http_status_code);
+   }
+   else if (http_status_code == 408) {
+      sprintf(pweb->response_headers, "HTTP/1.1 %d Request Timeout\r\nConnection: close", http_status_code);
+   }
+   else {
+      sprintf(pweb->response_headers, "HTTP/1.1 %d Internal Server Error\r\nConnection: close", http_status_code);
+   }
    if (pweb->response_clen >= 0) {
       sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
    }
@@ -1693,7 +1899,7 @@ int mg_get_all_cgi_variables(MGWEB *pweb)
    DBX_TRACE_INIT(0)
    int result, rc, n, len, lenv;
    char *p;
-   char buffer[32];
+   char buffer[128];
 
 #ifdef _WIN32
 __try {
@@ -1705,6 +1911,17 @@ __try {
       mg_lcase(buffer);
       if (!strcmp(buffer, "on")) {
          pweb->tls = 1;
+      }
+   }
+
+   /* v2.7.33 look for SSE header: Accept: text/event-stream */
+   pweb->sse = 0;
+   lenv = 127;
+   rc = mg_get_cgi_variable(pweb, "HTTP_ACCEPT", buffer, &lenv);
+   if (rc == MG_CGI_SUCCESS) {
+      mg_lcase(buffer);
+      if (strstr(buffer, "/event-stream")) {
+         pweb->sse = 1;
       }
    }
 
@@ -2678,7 +2895,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
-MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen)
+MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen, int wstype)
 {
    DBX_TRACE_INIT(0)
    unsigned int len_alloc;
@@ -2716,6 +2933,7 @@ __try {
    pweb->poutput_val_last = NULL;
    pweb->request_cookie = NULL;
 
+   pweb->wstype = wstype; /* v2.7.33 */
    pweb->evented = 0;
    pweb->wserver_chunks_response = 0;
 
@@ -4051,6 +4269,9 @@ __try {
                      if (!strcmp(word[1], "on")) {
                         ppath->admin = 2;
                      }
+                     else if (!strcmp(word[1], "off")) { /* v2.7.33 */
+                        ppath->admin = 0;
+                     }
                   }
                   else {
                      sprintf(mg_system.config_error, "Invalid 'location' parameter '%s' on line %d", word[0], ln); 
@@ -4192,6 +4413,9 @@ __try {
                   }
                   else if (!strcmp(word[0], "custompage_dbserver_disabled") && wn > 1) { /* 2.0.8 */
                      mg_system.custompage_dbserver_disabled = word[1];
+                  }
+                  else if (!strcmp(word[0], "custompage_dbserver_timeout") && wn > 1) { /* v2.7.33 */
+                     mg_system.custompage_dbserver_timeout = word[1];
                   }
                   else {
                      sprintf(mg_system.config_error, "Invalid 'global' parameter '%s' on line %d", word[0], ln); 
@@ -6621,13 +6845,14 @@ __try {
       n = fcntl(fileno(fp), F_SETLKW, &lock);
 
       fputs(p_buffer, fp);
-      fclose(fp);
 
       lock.l_type = F_UNLCK;
       lock.l_start = 0;
       lock.l_whence = SEEK_SET;
       lock.l_len = 0;
       n = fcntl(fileno(fp), F_SETLK, &lock);
+
+      fclose(fp); /* v2.7.33 */
    }
 
 #endif

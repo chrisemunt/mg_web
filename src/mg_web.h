@@ -462,6 +462,9 @@ typedef int    xc_status_t;
 #define MG_CGI_UNDEFINED         -1
 #define MG_CGI_TOOLONG           -2
 
+#define MG_WS_IIS                1
+#define MG_WS_APACHE             2
+#define MG_WS_NGINX              3
 
 #if defined(_WIN32)
 /*
@@ -1179,6 +1182,7 @@ typedef struct tagDBXCON {
 #define MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE   1
 #define MG_CUSTOMPAGE_DBSERVER_BUSY          2
 #define MG_CUSTOMPAGE_DBSERVER_DISABLED      3
+#define MG_CUSTOMPAGE_DBSERVER_TIMEOUT       4
 
 typedef struct tagMGSYS {
    int            config_size;
@@ -1195,6 +1199,7 @@ typedef struct tagMGSYS {
    char           *custompage_dbserver_unavailable;
    char           *custompage_dbserver_busy;
    char           *custompage_dbserver_disabled;
+   char           *custompage_dbserver_timeout; /* v2.7.33 */
    DBXLOG         *plog;
    char           cgi_base[64];
    char           *cgi[128];
@@ -1268,8 +1273,10 @@ typedef struct tagMGWEBSOCK {
 
 
 typedef struct tagMGWEB {
+   int            wstype; /* v2.7.33 web server type */
    int            evented;
    int            tls;
+   int            sse; /* v2.7.33 Server Sent Events */
    int            http_version_major;
    int            http_version_minor;
    int            wserver_chunks_response;
@@ -1300,6 +1307,9 @@ typedef struct tagMGWEB {
    int            offs_content;
    char           *response_content;
    char           *response_headers;
+   char           *response_content_type; /* v2.7.33 */
+   char           *response_cache_control;
+   char           *response_connection;
    int            response_headers_len;
    unsigned long  requestno_in;
    unsigned long  requestno_out;
@@ -1359,6 +1369,7 @@ extern MG_FREE       mg_ext_free;
 /* From web server interface code page */
 int                     mg_get_cgi_variable           (MGWEB *pweb, char *name, char *pbuffer, int *pbuffer_size);
 int                     mg_client_write               (MGWEB *pweb, unsigned char *pbuffer, int buffer_size);
+int                     mg_client_write_now           (MGWEB *pweb, unsigned char *pbuffer, int buffer_size);
 int                     mg_client_read                (MGWEB *pweb, unsigned char *pbuffer, int buffer_size);
 int                     mg_suppress_headers           (MGWEB *pweb);
 int                     mg_submit_headers             (MGWEB *pweb);
@@ -1400,7 +1411,7 @@ int                     mg_server_offline             (MGWEB *pweb, MGSRV *psrv,
 int                     mg_server_online              (MGWEB *pweb, MGSRV *psrv, char *info, int context);
 int                     mg_connect                    (MGWEB *pweb, int context);
 int                     mg_release_connection         (MGWEB *pweb, int close_connection);
-MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen);
+MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen, int wstype);
 DBXVAL *                mg_extend_response_memory     (MGWEB *pweb);
 int                     mg_release_request_memory     (MGWEB *pweb);
 int                     mg_find_sa_variable           (MGWEB *pweb);

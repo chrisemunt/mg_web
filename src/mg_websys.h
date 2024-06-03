@@ -33,13 +33,13 @@
 #define DBX_WITH_TLS             1
 
 #define MAJORVERSION             2
-#define MINORVERSION             6
-#define MAINTVERSION             32
+#define MINORVERSION             7
+#define MAINTVERSION             33
 #define BUILDNUMBER              0
 
 #define DBX_VERSION_MAJOR        "2"
-#define DBX_VERSION_MINOR        "6"
-#define DBX_VERSION_BUILD        "32"
+#define DBX_VERSION_MINOR        "7"
+#define DBX_VERSION_BUILD        "33"
 
 #define DBX_VERSION              DBX_VERSION_MAJOR "." DBX_VERSION_MINOR "." DBX_VERSION_BUILD
 #define DBX_COMPANYNAME          "MGateway Ltd\0"
