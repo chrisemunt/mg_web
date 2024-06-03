@@ -126,7 +126,7 @@ public:
       hr = ((IHttpContext *) pwebiis->phttp_context)->GetServerVariable("CONTENT_LENGTH", (PCSTR *) &(pwebiis->rbuffer), &size);
       request_clen = (unsigned long) strtol((char *) pwebiis->rbuffer, NULL, 10);
 
-      pweb = mg_obtain_request_memory((void *) pwebiis, request_clen);
+      pweb = mg_obtain_request_memory((void *) pwebiis, request_clen, MG_WS_IIS); /* v2.7.33 */
 
       pweb->pweb_server = (void *) pwebiis;
       pweb->evented = 0;
@@ -587,6 +587,13 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 #endif
 
+}
+
+
+/* v2.7.33 */
+int mg_client_write_now(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
+{
+   return mg_client_write(pweb, pbuffer, buffer_size);
 }
 
 
