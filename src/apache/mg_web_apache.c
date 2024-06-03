@@ -310,7 +310,7 @@ __try {
    if (pval) {
       request_clen = (unsigned long) strtol(pval, NULL, 10);
    }
-   pweb = mg_obtain_request_memory((void *) pwebapache, (unsigned long) request_clen);
+   pweb = mg_obtain_request_memory((void *) pwebapache, (unsigned long) request_clen, MG_WS_APACHE); /* v2.7.33 */
    if (!pweb) {
       return HTTP_INTERNAL_SERVER_ERROR;
    }
@@ -1144,6 +1144,48 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
    __try {
       code = GetExceptionCode();
       sprintf_s(buffer, 255, "Exception caught in f:mg_write_client: %x", code);
+      mg_log_event(pweb->plog, pweb, buffer, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER ) {
+      ;
+   }
+
+   return 0;
+}
+#endif
+
+}
+
+/* v2.7.33 */
+int mg_client_write_now(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
+{
+   MGWEBAPACHE *pwebapache;
+
+#ifdef _WIN32
+__try {
+#endif
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+
+   ap_rwrite((void *) pbuffer, buffer_size, pwebapache->r);
+
+   ap_rflush(pwebapache->r);
+/*
+   mg_log_buffer(pweb->plog, pweb, pbuffer, buffer_size, "mgweb: response", 0);
+*/
+
+   return 0;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char buffer[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(buffer, 255, "Exception caught in f:mg_write_client_now: %x", code);
       mg_log_event(pweb->plog, pweb, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
