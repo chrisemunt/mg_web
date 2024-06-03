@@ -366,6 +366,67 @@ static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
 }
 #endif
 
+/* v2.7.33 - very simple response - SSE */
+#if 0
+{
+   ngx_table_elt_t *h;
+   int n, len;
+   char buffer[256], ct[256], cc[256], ab[256];
+
+   r->main->count ++; /* prevent nginx close connection after upgrade */
+   r->keepalive = 1;
+   r->chunked = 0;
+
+   strcpy(buffer, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nX-Accel-Buffering: no\r\nConnection: keep-alive\r\n\r\n");
+   strcpy(cc, "Cache-Control: no-cache");
+   strcpy(ab, "X-Accel-Buffering: no");
+   r->headers_out.status = NGX_HTTP_OK;
+   strcpy(ct, "text/event-stream");
+   r->headers_out.content_type.len = strlen(ct);
+   r->headers_out.content_type.data = (u_char *) ct;
+
+   h = (ngx_table_elt_t *) ngx_list_push(&(r->headers_out.headers));
+   if (h == NULL) {
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+   }
+   h->hash = 1;
+   ngx_str_set(&h->key, cc);
+   h->key.len = (int) 13;
+   ngx_str_set(&h->value, cc + 15);
+   h->value.len = (int) 8;
+   h = (ngx_table_elt_t *) ngx_list_push(&(r->headers_out.headers));
+   if (h == NULL) {
+      return NGX_HTTP_INTERNAL_SERVER_ERROR;
+   }
+   h->hash = 1;
+   ngx_str_set(&h->key, ab);
+   h->key.len = (int) 17;
+   ngx_str_set(&h->value, ab + 19);
+   h->value.len = (int) 2;
+   ngx_http_send_header(r);
+
+   ngx_http_send_special(r, NGX_HTTP_FLUSH);
+
+   for (n = 0; n < 7; n ++) {
+      sprintf(buffer, "    data: (evented) line=%d; time=%lu\r\n\r\n\r\n", n, (unsigned long) time(NULL));
+      len = strlen(buffer);
+      sprintf(buffer, "%x", len - 6);
+      buffer[2] = '\r';
+      buffer[3] = '\n';
+      ngx_send(r->connection, (u_char *) buffer, strlen(buffer));
+      mg_sleep(7000);
+   }
+
+   ngx_send(r->connection, (u_char *) "D\r\ndata: END\r\n\r\n\r\n0\r\n\r\n", 23);
+
+   /* ngx_http_finalize_request(r, NGX_DONE); */
+   ngx_http_finalize_request(r, NGX_HTTP_CLOSE);
+   /* ngx_http_output_filter(r, NULL); */
+   return CACHE_SUCCESS;
+}
+#endif
+
+
    pwebnginx = ngx_pcalloc(r->pool, sizeof(MGWEBNGINX));
    if (pwebnginx == NULL) {
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -380,7 +441,7 @@ static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
    pwebnginx->thread_pool.data = (u_char *) pwebnginx->mg_thread_pool;
    pwebnginx->thread_pool.len = (size_t) strlen(pwebnginx->mg_thread_pool);
 
-   pweb = mg_obtain_request_memory((void *) pwebnginx, (unsigned long) (r->headers_in.content_length_n > 0 ? r->headers_in.content_length_n : 0));
+   pweb = mg_obtain_request_memory((void *) pwebnginx, (unsigned long) (r->headers_in.content_length_n > 0 ? r->headers_in.content_length_n : 0), MG_WS_NGINX); /* v2.7.33 */
    if (pweb == NULL) {
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
    }
@@ -1656,6 +1717,26 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
 }
 
+/* v2.7.33 */
+int mg_client_write_now(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
+{
+   int rc, bytes_sent;
+
+   rc = 0;
+   bytes_sent = mg_websocket_write(pweb, (char *) pbuffer, buffer_size);
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: websocket buffer_size=%d; bytes_sent=%d", (int) buffer_size, (int) bytes_sent);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web mg_client_write_now", 0);
+}
+*/
+   if (bytes_sent != buffer_size) {
+      rc = -1;
+   }
+   return rc;
+}
+
 
 int mg_suppress_headers(MGWEB *pweb)
 {
@@ -1691,6 +1772,7 @@ int mg_submit_headers(MGWEB *pweb)
 {
    int n, rc, status, size;
    char *pa, *pz, *p1, *p2;
+   char ab[32]; /* v2.7.33 */
    MGWEBNGINX *pwebnginx;
    ngx_table_elt_t *h;
 
@@ -1700,6 +1782,12 @@ __try {
 
    pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
    rc = NGX_OK;
+
+   if (pweb->sse) { /* v2.7.33 */
+      pwebnginx->r->main->count ++; /* prevent nginx close connection after upgrade */
+      pwebnginx->r->keepalive = 1;
+      pwebnginx->r->chunked = 0;
+   }
 
 /*
    {
@@ -1807,12 +1895,29 @@ __try {
       pa = (pz + 2);
    }
 
+   if (pweb->sse) { /* v2.7.33 */
+      strcpy(ab, "X-Accel-Buffering: no");
+      h = (ngx_table_elt_t *) ngx_list_push(&(pwebnginx->r->headers_out.headers));
+      if (h == NULL) {
+         return NGX_HTTP_INTERNAL_SERVER_ERROR;
+      }
+      h->hash = 1;
+      ngx_str_set(&h->key, ab);
+      h->key.len = (int) 17;
+      ngx_str_set(&h->value, ab + 19);
+      h->value.len = (int) 2;
+   }
+
    rc = ngx_http_send_header(pwebnginx->r);
+
+   if (pweb->sse) { /* v2.7.33 */
+      ngx_http_send_special(pwebnginx->r, NGX_HTTP_FLUSH);
+   }
 
 /*
    {
       char buffer[256];
-      sprintf(buffer, "rc=%d; clen=%d; status=%d;", n, pweb->response_clen, (int) pwebnginx->r->headers_out.status);
+      sprintf(buffer, "rc=%d; clen=%d; status=%d; sse=%d;", n, pweb->response_clen, (int) pwebnginx->r->headers_out.status, pweb->sse);
       mg_log_event(pweb->plog, NULL, buffer, "mgweb: headers result", 0);
    }
 */
