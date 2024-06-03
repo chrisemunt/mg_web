@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-8 April 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+3 June 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.6; Revision 32.
+* Current Release: Version: 2.7; Revision 33.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -298,3 +298,13 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Improve the mechanism through which WebSocket functions are invoked.  Instead of embedding the WebSocket function name and path in the client-side script, a mapping must be created in the appropriate location block of the configuration.  For example:
 	* websocket mywebsocket.mgw websocket^webroutine
 	* Use '/[location_path]/mywebsocket.mgw' in the client-side script.  When invoked, this URL will map to 'websocket^webroutine' on the DB Server.
+
+### v2.7.33 (3 June 2024)
+
+* Introduce support for Server-Sent Events (SSE).
+	* Note that in order to use this facility, DB Superserver v4.5.32 must be installed.
+* Ensure that the 'administrator: off' configuration setting is properly honoured.
+* Return a HTTP status code of '504 Gateway Timeout' if a request to the DB Server times-out.
+	* Previous versions would return '500 Internal Server Error' on response timeout.
+	* A custom form can be created to override the default response by defining the form to be returned in parameter: **custompage\_dbserver\_timeout**
+  
