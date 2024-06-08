@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-3 June 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+7 June 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.7; Revision 33.
+* Current Release: Version: 2.7; Revision 34.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -307,4 +307,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Return a HTTP status code of '504 Gateway Timeout' if a request to the DB Server times-out.
 	* Previous versions would return '500 Internal Server Error' on response timeout.
 	* A custom form can be created to override the default response by defining the form to be returned in parameter: **custompage\_dbserver\_timeout**
+
+### v2.7.34 (7 June 2024)
+
+* Correct a fault in the management of SSE channels that could lead to infinite loops on channel closure - particularly when used with the JavaScript Superserver.
+
   
