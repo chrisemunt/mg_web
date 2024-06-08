@@ -176,6 +176,9 @@ Version 2.7.33 3 June 2024:
    Correct a warning that lead to compiler errors on ARM64 (Raspberry Pi) platforms.
       error: pointer 'fp' used after 'fclose' [-Werror=use-after-free] n = fcntl(fileno(fp), F_SETLK, &lock);
 
+Version 2.7.34 7 June 2024:
+   Correct a fault in the management of SSE channels that could lead to infinite loops - particularly when used with the JavaScript Superserver.
+
 */
 
 
@@ -891,9 +894,10 @@ mg_web_process_failover:
             mg_log_buffer(pweb->plog, pweb, p, (rc > 0 ? rc : 0), bufferx, 0);
          }
 */
-         if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
+         if (rc < 1) { /* v2.7.34 */
             break;
          }
+
          if (pweb->wstype == MG_WS_NGINX) {
             sprintf(buffer, "%x", rc);
             len1 = (int) strlen(buffer);
