@@ -138,6 +138,7 @@ Paste the code below into it:
            ; how WebLink would hold it
            ;
            new %s,%rc,%def,%ct,%KEY,%KEYHEAD
+           kill ^MGW("MPC",$J)
            set %s=$$stream^%zmgsis(.%sys)
            set %rc=$$nvpair^%zmgsis(.%KEY,$get(%CGIEVAR("QUERY_STRING")))
            set %rc=$$content^%zmgsis(.%KEY,.%KEYHEAD,.%content,.%CGIEVAR)
@@ -156,15 +157,14 @@ Paste the code below into it:
            . set filename=$piece($piece($piece($get(%KEYHEAD(name,"Content-Disposition")),"filename=",2)," ",1),";",1)
            . set len=$length(filename) if len>1,$extract(filename)="""",$extract(filename,len)="""" set @("filename="_filename)
            . set data=$get(%KEY(name))
-           . set %MPC(name)=""
-           . set ^MGW("MPC",$J,name,1)=data
-           . set %KEY(name)="1#1~0~"_$length(data)_"~"_$get(%KEYHEAD(name,"Content-Type"))_"~"_filename
+           . if 'len set %KEY(name)=data
+           . if len set %MPC(name)="",^MGW("MPC",$J,name,1)=data,%KEY(name)="1#1~0~"_$length(data)_"~"_$get(%KEYHEAD(name,"Content-Type"))_"~"_filename
            . QUIT
-           do weblink(.%CGIEVAR,.%KEY)
+           do weblink(.%CGIEVAR,.%KEY,.%MPC)
            QUIT %s
            ;
-        weblink(%CGIEVAR,%KEY)
-           new (%CGIEVAR,%KEY)
+        weblink(%CGIEVAR,%KEY,%MPC)
+           new (%CGIEVAR,%KEY,%MPC)
            ;
            set %METHOD=$get(%CGIEVAR("REQUEST_METHOD"))
            ;
