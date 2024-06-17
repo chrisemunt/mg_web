@@ -137,7 +137,7 @@ Paste the code below into it:
            ; Normalise the incoming request information to match
            ; how WebLink would hold it
            ;
-           new %s,%rc,%def,%ct,%KEY,%KEYHEAD
+           new %s,%rc,%def,%ct,%KEY,%KEYHEAD,%MPC
            kill ^MGW("MPC",$J)
            set %s=$$stream^%zmgsis(.%sys)
            set %rc=$$nvpair^%zmgsis(.%KEY,$get(%CGIEVAR("QUERY_STRING")))
