@@ -179,6 +179,14 @@ Version 2.7.33 3 June 2024:
 Version 2.7.34 7 June 2024:
    Correct a fault in the management of SSE channels that could lead to infinite loops - particularly when used with the JavaScript Superserver.
 
+Version 2.7.35 19 June 2024:
+   Record extra error information when connections made through the YottaDB API fail.
+   For UNIX systems, record at initialisation-time the user and group under which the hosting web server worker process is running.
+   For example:
+      mg_web: worker initialization
+      configuration: /opt/nginx1261/conf/mgweb.conf (user=nobody; group=nogroup)
+
+
 */
 
 
@@ -1213,6 +1221,12 @@ __try {
    else if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
 
       ydb_string_t out, in1, in2, in3;
+#if !defined(_WIN32)
+      uid_t uid;
+      gid_t gid;
+      struct passwd *pwd;
+      struct group *grp;
+#endif
 
       DBX_TRACE(20)
       memcpy((void *) pweb->mode, (void *) "api", (size_t) 3);
@@ -1270,9 +1284,29 @@ __try {
          pweb->response_size = (pweb->output_val.api_size - 5);
          pweb->response_remaining = 0;
       }
-      else if (pcon->p_ydb_so->p_ydb_zstatus) {
-         pcon->p_ydb_so->p_ydb_zstatus((ydb_char_t *) pweb->error, (ydb_long_t) 255);
-         /* mg_log_event(pweb->plog, pweb, pweb->error, "mg_web_execute: YottaDB API error text", 0); */
+      else if (pcon->p_ydb_so->p_ydb_zstatus) { /* v2.7.35 */
+         char buffer[1024], uuser[32], ugroup[32];
+
+         *uuser = '\0';
+         *ugroup = '\0';
+#if defined(_WIN32)
+         strcpy(buffer, "mg_web_execute: YottaDB API error text");
+#else
+         uid = getuid();
+         gid = getgid();
+         if ((pwd = getpwuid(uid)) != NULL) {
+            strncpy(uuser, pwd->pw_name, 30);
+            uuser[30] = '\0';
+         }
+         if ((grp = getgrgid(gid)) != NULL) {
+            strncpy(ugroup, grp->gr_name, 30);
+            ugroup[30] = '\0';
+         }
+         sprintf(buffer, "mg_web_execute: YottaDB API error text: process user=%s; group=%s;", uuser, ugroup);
+#endif
+
+         pcon->p_ydb_so->p_ydb_zstatus((ydb_char_t *) pweb->error, (ydb_long_t) DBX_ERROR_SIZE - 1); /* v2.7.35 */
+         mg_log_event(pweb->plog, pweb, pweb->error, buffer, 0);
       }
 
       DBX_UNLOCK();
@@ -3636,6 +3670,12 @@ int mg_worker_init()
    DBX_TRACE_INIT(0)
 #if defined(_WIN32)
    int n;
+#else
+   char uuser[32], ugroup[32];
+   uid_t uid;
+   gid_t gid;
+   struct passwd *pwd;
+   struct group *grp;
 #endif
    int len, lenx;
    unsigned int size, size_default;
@@ -3673,7 +3713,26 @@ __try {
    }
 #endif
 
+   /* v2.7.35 */
+#if defined(_WIN32)
    sprintf(buffer, "configuration: %s", mg_system.config_file);
+#else
+   *uuser = '\0';
+   *ugroup = '\0';
+
+   uid = getuid();
+   gid = getgid();
+   if ((pwd = getpwuid(uid)) != NULL) {
+      strncpy(uuser, pwd->pw_name, 30);
+      uuser[30] = '\0';
+   }
+   if ((grp = getgrgid(gid)) != NULL) {
+      strncpy(ugroup, grp->gr_name, 30);
+      ugroup[30] = '\0';
+   }
+   sprintf(buffer, "configuration: %s (user=%s; group=%s)", mg_system.config_file, uuser, ugroup);
+#endif
+
    mg_log_event(&(mg_system.log), NULL, buffer, "mg_web: worker initialization", 0);
 
    mg_system.chunking = 1; /* 2.0.8 */
@@ -6015,6 +6074,14 @@ int ydb_open(MGWEB *pweb)
 
    rc = pcon->p_ydb_so->p_ydb_init();
 
+   if (rc != YDB_OK) { /* v2.7.35 */
+      if (pcon->p_ydb_so->p_ydb_zstatus) {
+         pcon->p_ydb_so->p_ydb_zstatus((ydb_char_t *) pweb->error, (ydb_long_t) DBX_ERROR_SIZE - 1);
+         mg_log_event(pweb->plog, pweb, pweb->error, "ydb_init: YottaDB API error text", 0);
+      }
+      goto ydb_open_exit;
+   }
+
    strcpy(buffer, "$zv");
    zv.buf_addr = buffer;
    zv.len_used = (int) strlen(buffer);
@@ -6030,7 +6097,7 @@ int ydb_open(MGWEB *pweb)
       data.buf_addr[data.len_used] = '\0';
    }
 
-   if (rc == CACHE_SUCCESS) {
+   if (rc == YDB_OK) {
       ydb_parse_zv(data.buf_addr, &(pcon->zv));
       sprintf(pcon->p_zv->version, "%d.%d.b%d", pcon->p_zv->majorversion, pcon->p_zv->minorversion, pcon->p_zv->mg_build);
       mg_ydb_so_global = pcon->p_ydb_so;
