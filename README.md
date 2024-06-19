@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-17 June 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+19 June 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.7; Revision 34a.
+* Current Release: Version: 2.7; Revision 35.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -316,4 +316,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 * Update the WebLink compatibiity shim code listed [here](./mg_web_weblink_config.md).  This update corrects a fault in the code for processing multi-part requests.  
 
-  
+### v2.7.35 (19 June 2024)
+
+* Record (in the event log) extra error information when connections made through the YottaDB API fail.
+* For UNIX systems, record at initialisation-time the user and group under which the hosting web server worker process is running.
+	* For example: configuration: /opt/nginx1261/conf/mgweb.conf (user=nobody; group=nogroup).
