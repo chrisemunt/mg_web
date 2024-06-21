@@ -117,6 +117,8 @@
 #include <pthread.h>
 #include <dlfcn.h>
 #include <math.h>
+#include <pwd.h> /* v2.7.36 */
+#include <grp.h>
 
 #endif
 

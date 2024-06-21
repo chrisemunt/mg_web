@@ -34,12 +34,12 @@
 
 #define MAJORVERSION             2
 #define MINORVERSION             7
-#define MAINTVERSION             35
+#define MAINTVERSION             36
 #define BUILDNUMBER              0
 
 #define DBX_VERSION_MAJOR        "2"
 #define DBX_VERSION_MINOR        "7"
-#define DBX_VERSION_BUILD        "35"
+#define DBX_VERSION_BUILD        "36"
 
 #define DBX_VERSION              DBX_VERSION_MAJOR "." DBX_VERSION_MINOR "." DBX_VERSION_BUILD
 #define DBX_COMPANYNAME          "MGateway Ltd\0"

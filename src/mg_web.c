@@ -186,6 +186,10 @@ Version 2.7.35 19 June 2024:
       mg_web: worker initialization
       configuration: /opt/nginx1261/conf/mgweb.conf (user=nobody; group=nogroup)
 
+Version 2.7.36 21 June 2024:
+   Correct a fault that resulted in the build for the Apache module failing under UNIX.
+	   This regression was introduced in v2.7.35.
+
 
 */
 
