@@ -225,6 +225,20 @@ Save and compile this ObjectScript routine.  This routine calls procedures in ro
         END ; Send the end-of-data marker to the client
            write $char(2,2,10)
            QUIT
+           ;
+        sendhead(head) ; Send record header to the client
+           new i,del
+           if $data(%TXT(1)) set head="",del="" for i=1:1 quit:'$data(%TXT(i))  set head=head_del_%TXT(i),del=$char(1)
+           write $char(2)_$get(head)_$char(10)
+           QUIT
+           ;
+        sendline(data) ; Send a line of data to the client
+           new i,del
+           if $data(%TXT(1)) set data="",del="" for i=1:1 quit:'$data(%TXT(i))  set data=data_del_%TXT(i),del=$char(1)
+           write $get(data)_$char(10)
+           QUIT
+           ;
+
 
 If you already have a custom ^%ZMGW2 routine, you should leave it alone and *mg_web* will invoke it
 for you.
@@ -252,6 +266,16 @@ to modify the page generation logic:
            write "</html>"_$char(13,10)
            QUIT
            ;
+        JAVA ; Process in-form M Method (Invoked by the mgwx.js AJAX module)
+           ; Receive request in %REQUEST
+           ;    Associated parameters in %REQUEST(1->n)
+           ;
+           ; Send each line of response as sendline^%mgwj(<Data>)
+           ;    Finally, quit from this code module
+           ;
+           do sendline^%mgwj("This is the response to '"_%REQUEST_"' from the M System")
+           QUIT
+
 
 
 Save and compile this ObjectScript routine.
