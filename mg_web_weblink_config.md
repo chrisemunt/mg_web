@@ -154,8 +154,8 @@ Paste the code below into it:
            . QUIT
            set name="" for  set name=$order(%KEYHEAD(name)) quit:name=""  do
            . new filename,len,data
-           . set filename=$piece($piece($piece($get(%KEYHEAD(name,"Content-Disposition")),"filename=",2)," ",1),";",1)
-           . set len=$length(filename) if len>1,$extract(filename)="""",$extract(filename,len)="""" set @("filename="_filename)
+           . set filename=$piece($piece($get(%KEYHEAD(name,"Content-Disposition")),"filename=""",2),"""",1)
+           . set len=$length(filename)
            . set data=$get(%KEY(name))
            . if 'len set %KEY(name)=data
            . if len set %MPC(name)="",^MGW("MPC",$J,name,1)=data,%KEY(name)="1#1~0~"_$length(data)_"~"_$get(%KEYHEAD(name,"Content-Type"))_"~"_filename
