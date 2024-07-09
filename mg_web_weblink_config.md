@@ -153,12 +153,19 @@ Paste the code below into it:
            . merge ^MGW("MPC",$job,"CONTENT")=%content
            . QUIT
            set name="" for  set name=$order(%KEYHEAD(name)) quit:name=""  do
-           . new filename,len,data
+           . new filename,len,data,lendata,n
            . set filename=$piece($piece($get(%KEYHEAD(name,"Content-Disposition")),"filename=""",2),"""",1)
            . set len=$length(filename)
            . set data=$get(%KEY(name))
            . if 'len set %KEY(name)=data
-           . if len set %MPC(name)="",^MGW("MPC",$J,name,1)=data,%KEY(name)="1#1~0~"_$length(data)_"~"_$get(%KEYHEAD(name,"Content-Type"))_"~"_filename
+           . if len do
+           . . set %MPC(name)=""
+           . . set lendata=$length(data)
+           . . if '$data(%KEY(name,1)) set ^MGW("MPC",$J,name,1)=data
+           . . for n=1:1 quit:'$data(%KEY(name,n))  set data=$get(%KEY(name,n)),lendata=lendata+$length(data),^MGW("MPC",$J,name,n)=data
+           . . kill %KEY(name)
+           . . set %KEY(name)="1#1~0~"_lendata_"~"_$get(%KEYHEAD(name,"Content-Type"))_"~"_filename
+           . . QUIT
            . QUIT
            do weblink(.%CGIEVAR,.%KEY,.%MPC)
            QUIT %s
