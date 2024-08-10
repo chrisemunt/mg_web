@@ -137,7 +137,8 @@ Paste the code below into it:
            ; Normalise the incoming request information to match
            ; how WebLink would hold it
            ;
-           new %s,%rc,%def,%ct,%KEY,%KEYHEAD
+           new %s,%rc,%def,%ct,%KEY,%KEYHEAD,%MPC
+           kill ^MGW("MPC",$J)
            set %s=$$stream^%zmgsis(.%sys)
            set %rc=$$nvpair^%zmgsis(.%KEY,$get(%CGIEVAR("QUERY_STRING")))
            set %rc=$$content^%zmgsis(.%KEY,.%KEYHEAD,.%content,.%CGIEVAR)
@@ -152,19 +153,25 @@ Paste the code below into it:
            . merge ^MGW("MPC",$job,"CONTENT")=%content
            . QUIT
            set name="" for  set name=$order(%KEYHEAD(name)) quit:name=""  do
-           . new filename,len,data
-           . set filename=$piece($piece($piece($get(%KEYHEAD(name,"Content-Disposition")),"filename=",2)," ",1),";",1)
-           . set len=$length(filename) if len>1,$extract(filename)="""",$extract(filename,len)="""" set @("filename="_filename)
+           . new filename,len,data,lendata,n
+           . set filename=$piece($piece($get(%KEYHEAD(name,"Content-Disposition")),"filename=""",2),"""",1)
+           . set len=$length(filename)
            . set data=$get(%KEY(name))
-           . set %MPC(name)=""
-           . set ^MGW("MPC",$J,name,1)=data
-           . set %KEY(name)="1#1~0~"_$length(data)_"~"_$get(%KEYHEAD(name,"Content-Type"))_"~"_filename
+           . if 'len set %KEY(name)=data
+           . if len do
+           . . set %MPC(name)=""
+           . . set lendata=$length(data)
+           . . if '$data(%KEY(name,1)) set ^MGW("MPC",$J,name,1)=data
+           . . for n=1:1 quit:'$data(%KEY(name,n))  set data=$get(%KEY(name,n)),lendata=lendata+$length(data),^MGW("MPC",$J,name,n)=data
+           . . kill %KEY(name)
+           . . set %KEY(name)="1#1~0~"_lendata_"~"_$get(%KEYHEAD(name,"Content-Type"))_"~"_filename
+           . . QUIT
            . QUIT
-           do weblink(.%CGIEVAR,.%KEY)
+           do weblink(.%CGIEVAR,.%KEY,.%MPC)
            QUIT %s
            ;
-        weblink(%CGIEVAR,%KEY)
-           new (%CGIEVAR,%KEY)
+        weblink(%CGIEVAR,%KEY,%MPC)
+           new (%CGIEVAR,%KEY,%MPC)
            ;
            set %METHOD=$get(%CGIEVAR("REQUEST_METHOD"))
            ;
@@ -225,6 +232,20 @@ Save and compile this ObjectScript routine.  This routine calls procedures in ro
         END ; Send the end-of-data marker to the client
            write $char(2,2,10)
            QUIT
+           ;
+        sendhead(head) ; Send record header to the client
+           new i,del
+           if $data(%TXT(1)) set head="",del="" for i=1:1 quit:'$data(%TXT(i))  set head=head_del_%TXT(i),del=$char(1)
+           write $char(2)_$get(head)_$char(10)
+           QUIT
+           ;
+        sendline(data) ; Send a line of data to the client
+           new i,del
+           if $data(%TXT(1)) set data="",del="" for i=1:1 quit:'$data(%TXT(i))  set data=data_del_%TXT(i),del=$char(1)
+           write $get(data)_$char(10)
+           QUIT
+           ;
+
 
 If you already have a custom ^%ZMGW2 routine, you should leave it alone and *mg_web* will invoke it
 for you.
@@ -252,6 +273,16 @@ to modify the page generation logic:
            write "</html>"_$char(13,10)
            QUIT
            ;
+        JAVA ; Process in-form M Method (Invoked by the mgwx.js AJAX module)
+           ; Receive request in %REQUEST
+           ;    Associated parameters in %REQUEST(1->n)
+           ;
+           ; Send each line of response as sendline^%mgwj(<Data>)
+           ;    Finally, quit from this code module
+           ;
+           do sendline^%mgwj("This is the response to '"_%REQUEST_"' from the M System")
+           QUIT
+
 
 
 Save and compile this ObjectScript routine.
