@@ -1289,6 +1289,8 @@ typedef struct tagMGWEB {
    int            request_clen_remaining; /* v2.2.18 */
    int            request_csize; /* v2.2.18 */
    int            request_bsize; /* v2.2.18 */
+   int            request_chunked; /* v2.8.37 */
+   int            request_read_status; /* v2.8.37 */
    char           *request_content;
    char           *script_name;
    int            script_name_len;
@@ -1413,7 +1415,7 @@ int                     mg_server_offline             (MGWEB *pweb, MGSRV *psrv,
 int                     mg_server_online              (MGWEB *pweb, MGSRV *psrv, char *info, int context);
 int                     mg_connect                    (MGWEB *pweb, int context);
 int                     mg_release_connection         (MGWEB *pweb, int close_connection);
-MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen, int wstype);
+MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen, int request_chunked, int wstype);
 DBXVAL *                mg_extend_response_memory     (MGWEB *pweb);
 int                     mg_release_request_memory     (MGWEB *pweb);
 int                     mg_find_sa_variable           (MGWEB *pweb);

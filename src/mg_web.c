@@ -190,7 +190,9 @@ Version 2.7.36 21 June 2024:
    Correct a fault that resulted in the build for the Apache module failing under UNIX.
 	   This regression was introduced in v2.7.35.
 
-
+Version 2.8.37 28 August 2024:
+   Introduce support for chunked request payloads.
+   - HTTP_TRANSFER_ENCODING=="chunked"
 */
 
 
@@ -435,6 +437,36 @@ __try {
       return rc;
    }
 
+   /* v2.8.37 test procedure for chunked requests */
+#if 0
+   if (pweb->request_chunked) {
+      int n, rc, total;
+
+      total = 0;
+      pweb->request_content = (char *) pweb->input_buf.buf_addr + (pweb->input_buf.len_used + 5); /* space for content length */
+      for (n = 0; n < 100; n ++) {
+         rc = mg_client_read(pweb, (unsigned char *) pweb->request_content, 10000);
+         total += rc;
+         {
+            char bufferx[1024];
+            sprintf(bufferx, "HTTP Request: n=%d; rc=%d; total=%d; request_read_status=%d;", n, rc, total, pweb->request_read_status);
+            mg_log_event(pweb->plog, pweb, bufferx, (char * ) "mg_client_read", 0);
+         }
+
+         if (pweb->request_read_status == 1) {
+            break;
+         }
+      }
+
+      pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
+      mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
+      MG_LOG_RESPONSE_HEADER(pweb);
+      mg_submit_headers(pweb);
+      mg_log_event(pweb->plog, pweb, "Test Probe", "mg_web: error", 0);
+      return CACHE_FAILURE;
+   }
+#endif
+
    DBX_TRACE(8)
    pweb->request_long = 0;
    if (pweb->request_clen) {
@@ -474,6 +506,26 @@ __try {
          }
 */
       }
+   }
+   else if (pweb->request_chunked) { /* v2.8.37 */
+      /* v2.2.18 */
+      pweb->request_bsize = (pweb->input_buf.len_alloc - (pweb->input_buf.len_used + 15)); /* amount of buffer space available for request payload */
+      if (pweb->psrv->max_string_size < pweb->input_buf.len_alloc) {
+         pweb->request_bsize = (pweb->psrv->max_string_size - (pweb->input_buf.len_used + 15)); /* amount of buffer space available for request payload */
+         /* mg_log_event(pweb->plog, pweb, (char *) "******* Revise buffer size downwards *******", (char *) "HTTP Request Payload", 0); */
+      }
+      pweb->request_long = 1;
+      pweb->request_content = (char *) pweb->input_buf.buf_addr + (pweb->input_buf.len_used + 20); /* space for headers EOF marker, content chunk length and param = '' AND 5 byte header for content itself */
+      len = mg_client_read(pweb, (unsigned char *) pweb->request_content, pweb->request_bsize);
+/*
+      {
+         char bufferx[1024];
+         sprintf(bufferx, "HTTP Chunked Request: len=%d; buffer_size=%d; request_read_status=%d;", len, pweb->request_bsize, pweb->request_read_status);
+         mg_log_event(pweb->plog, pweb, bufferx, (char *) "mg_client_read 1", 0);
+      }
+*/
+      mg_add_block_size((unsigned char *) (pweb->request_content - 5), (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
+      pweb->request_csize = len;
    }
 
    DBX_TRACE(9)
@@ -1528,27 +1580,57 @@ __try {
       if (rc < 0) {
          break;
       }
-      if (pweb->request_clen_remaining == 0) {
-         rc = CACHE_SUCCESS;
-         break;
-      }
 
-      DBX_TRACE(3)
-      bsize = pweb->request_bsize;
-      if (tail_ptr) {
-         bsize -= tail_len;
-         mg_memcpy((void *) pweb->request_content, (void *) (pweb->request_content + tail_ptr), (size_t) tail_len);
-      }
+      if (pweb->request_chunked) { /* v2.8.37 */
+         if (pweb->request_read_status == 1) {
+            /* mg_log_event(pweb->plog, pweb, "******* End of Chunked Request Data *******", "HTTP Long Request", 0); */
+            rc = CACHE_SUCCESS;
+            break;
+         }
 
-      pweb->request_csize = pweb->request_clen_remaining;
-      if (pweb->request_csize > bsize) {
+         DBX_TRACE(3)
+         bsize = pweb->request_bsize;
+         if (tail_ptr) {
+            bsize -= tail_len;
+            mg_memcpy((void *) pweb->request_content, (void *) (pweb->request_content + tail_ptr), (size_t) tail_len);
+         }
+
          pweb->request_csize = bsize;
-      }
 
-      DBX_TRACE(4)
-      mg_client_read(pweb, (unsigned char *) (pweb->request_content + tail_len), pweb->request_csize);
-      mg_add_block_size((unsigned char *) netbuf, 0, (pweb->request_csize + tail_len), DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
-      pweb->request_clen_remaining -= pweb->request_csize;
+         DBX_TRACE(4)
+         pweb->request_csize = mg_client_read(pweb, (unsigned char *) (pweb->request_content + tail_len), pweb->request_csize);
+/*
+         {
+            char bufferx[1024];
+            sprintf(bufferx, "HTTP Chunked Request: len=%d; buffer_size=%d; request_read_status=%d;", pweb->request_csize, bsize, pweb->request_read_status);
+            mg_log_event(pweb->plog, pweb, bufferx, (char*)"mg_client_read 1", 0);
+         }
+*/
+         mg_add_block_size((unsigned char *) netbuf, 0, (pweb->request_csize + tail_len), DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
+      }
+      else {
+         if (pweb->request_clen_remaining == 0) {
+            rc = CACHE_SUCCESS;
+            break;
+         }
+
+         DBX_TRACE(3)
+         bsize = pweb->request_bsize;
+         if (tail_ptr) {
+            bsize -= tail_len;
+            mg_memcpy((void *) pweb->request_content, (void *) (pweb->request_content + tail_ptr), (size_t) tail_len);
+         }
+
+         pweb->request_csize = pweb->request_clen_remaining;
+         if (pweb->request_csize > bsize) {
+            pweb->request_csize = bsize;
+         }
+
+         DBX_TRACE(4)
+         mg_client_read(pweb, (unsigned char *) (pweb->request_content + tail_len), pweb->request_csize);
+         mg_add_block_size((unsigned char *) netbuf, 0, (pweb->request_csize + tail_len), DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
+         pweb->request_clen_remaining -= pweb->request_csize;
+      }
    }
 
    return rc;
@@ -2937,7 +3019,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
-MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen, int wstype)
+MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen, int request_chunked, int wstype)
 {
    DBX_TRACE_INIT(0)
    unsigned int len_alloc;
@@ -2946,6 +3028,15 @@ MGWEB * mg_obtain_request_memory(void *pweb_server, unsigned long request_clen, 
 #ifdef _WIN32
 __try {
 #endif
+
+   /* v2.8.37 */
+/*
+   {
+      char buffer[256];
+      sprintf(buffer, "mg_obtain_request_memory: request_clen=%lu; request_chunked=%d;", request_clen, request_chunked);
+      mg_log_event(mg_system.plog, NULL, buffer, "mg_obtain_request_memory", 0);
+   }
+*/
 
    len_alloc = 128000 + request_clen;
    if (len_alloc < mg_system.request_buffer_size) { /* v2.1.10 */
@@ -2988,6 +3079,8 @@ __try {
    pweb->ppath = NULL;
 
    pweb->request_clen = (int) request_clen;
+   pweb->request_chunked = (int) request_chunked; /* v2.8.37 */
+   pweb->request_read_status = 0;
 /*
    {
       char buffer[256];
