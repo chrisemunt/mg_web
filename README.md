@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-8 July 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+28 August 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.7; Revision 36a.
+* Current Release: Version: 2.8; Revision 37.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -331,3 +331,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 * Update the WebLink compatibiity shim code listed [here](./mg_web_weblink_config.md).  This update includes an example call-out for the WebLink Event Broker facility.  
 
+### v2.8.37 (28 August 2024)
+
+* Introduce support for chunked request payloads.
