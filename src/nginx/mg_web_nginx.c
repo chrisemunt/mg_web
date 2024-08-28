@@ -281,8 +281,8 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
 
 static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
 {
-   int n, clen, ok;
-   int rc;
+   int n, rc, clen, ok, request_chunked;
+   unsigned long request_clen;
    char ext[16];
    ngx_http_mg_web_loc_conf_t *dconf;
    MGWEB *pweb;
@@ -441,7 +441,10 @@ static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
    pwebnginx->thread_pool.data = (u_char *) pwebnginx->mg_thread_pool;
    pwebnginx->thread_pool.len = (size_t) strlen(pwebnginx->mg_thread_pool);
 
-   pweb = mg_obtain_request_memory((void *) pwebnginx, (unsigned long) (r->headers_in.content_length_n > 0 ? r->headers_in.content_length_n : 0), MG_WS_NGINX); /* v2.7.33 */
+   request_clen = (unsigned long) (r->headers_in.content_length_n > 0 ? r->headers_in.content_length_n : 0);
+   request_chunked = (int) r->headers_in.chunked; /* v2.8.37 */
+
+   pweb = mg_obtain_request_memory((void *) pwebnginx, (unsigned long) request_clen, request_chunked, MG_WS_NGINX); /* v2.7.33 */
    if (pweb == NULL) {
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
    }
@@ -486,7 +489,7 @@ static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
 
 static void mg_payload_handler(ngx_http_request_t *r)
 {
-   int rc;
+   int rc, len;
 /*
    size_t len;
    ngx_buf_t *buf;
@@ -560,6 +563,54 @@ static void mg_payload_handler(ngx_http_request_t *r)
          }
 */
       }
+   }
+   else if (pweb->request_chunked) { /* v2.8.37 */
+      /* v2.8.37 test procedure for chunked requests */
+#if 0
+      int n, len, total;
+      char buffer[1024];
+
+      total = 0;
+      for (n = 0; n < 100; n ++) {
+         len = mg_client_read(pweb, (unsigned char *) buffer, 1000);
+         total += len;
+         {
+            char bufferx[1024];
+            sprintf(bufferx, "HTTP Chunked Request: n=%d; len=%d; total=%d; request_read_status=%d;", n, len, total, pweb->request_read_status);
+            mg_log_event(pweb->plog, pweb, bufferx, "mg_client_read", 0);
+         }
+         if (pweb->request_read_status == 1) {
+            break;
+         }
+      }
+#endif
+
+      pweb->request_bsize = (pweb->input_buf.len_alloc - (pweb->input_buf.len_used + 15)); /* amount of buffer space available for request payload */
+      if (pweb->psrv->max_string_size < pweb->input_buf.len_alloc) {
+         pweb->request_bsize = (pweb->psrv->max_string_size - (pweb->input_buf.len_used + 15)); /* amount of buffer space available for request payload */
+         /* mg_log_event(pweb->plog, pweb, (char *) "******* Revise buffer size downwards *******", (char *) "HTTP Request Payload", 0); */
+      }
+
+      pweb->request_long = 1;
+      pweb->request_content = (char *) pweb->input_buf.buf_addr + (pweb->input_buf.len_used + 20); /* space for headers EOF marker, content chunk length and param = '' AND 5 byte header for content itself */
+      len = mg_client_read(pweb, (unsigned char *) pweb->request_content, pweb->request_bsize);
+/*
+      {
+         char bufferx[1024];
+         sprintf(bufferx, "HTTP Chunked Request: len=%d; buffer_size=%d; request_read_status=%d;", len, pweb->request_bsize, pweb->request_read_status);
+         mg_log_event(pweb->plog, pweb, bufferx, (char *) "mg_client_read 1", 0);
+      }
+*/
+      mg_add_block_size((unsigned char *) (pweb->request_content - 5), (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBCONTENT, DBX_DTYPE_STR);
+      pweb->request_csize = len;
+      /*
+         {
+            char bufferx[1024];
+            sprintf(bufferx, "HTTP Long Request 1: pweb->request_content=%p; pweb->input_buf.len_used=%d; pweb->request_clen=%d; pweb->request_clen_remaining=%d; clen_to_send=%d;", pweb->request_content, pweb->input_buf.len_used, pweb->request_clen, pweb->request_clen_remaining, pweb->request_bsize);
+            mg_log_buffer(pweb->plog, pweb, (pweb->request_content - 5), 30, bufferx, 0);
+         }
+      */
+
    }
 
 #else
@@ -1518,10 +1569,11 @@ __try {
 /*
       {
          char bufferx[256];
-         sprintf(bufferx, "request_clen=%d; buffer_size=%d; request_total=%lu;", pweb->request_clen, buffer_size, pwebnginx->request_total);
+         sprintf(bufferx, "request_clen=%d; request_chunked=%d; buffer_size=%d; request_total=%lu;", pweb->request_clen, pweb->request_chunked, buffer_size, pwebnginx->request_total);
          mg_log_event(&(mg_system.log), NULL, bufferx, "mg_payload_handler: temp_file", 0);
       }
 */
+      len = 0;
       while ((len = ngx_read_file(&(pwebnginx->r->request_body->temp_file->file), pbuffer + got, buffer_size, pwebnginx->request_total)) > 0) {
          pwebnginx->request_total += len;
          got += len;
@@ -1531,15 +1583,19 @@ __try {
             break;
          }
       }
+      if (len < 1) {
+         pweb->request_read_status = 1; /* v2.8.37 End of (chunked) Request Data */
+      }
    }
    else {  
 /*
       {
          char bufferx[256];
-         sprintf(bufferx, "request_clen=%d; buffer_size=%d; request_buf=%p; request_buf_len=%d; request_buf_offset=%d;", pweb->request_clen, buffer_size, pwebnginx->request_buf, pwebnginx->request_buf_len, pwebnginx->request_buf_offset);
+         sprintf(bufferx, "request_clen=%d; request_chunked=%d; buffer_size=%d; request_buf=%p; request_buf_len=%d; request_buf_offset=%d;", pweb->request_clen, pweb->request_chunked, buffer_size, pwebnginx->request_buf, pwebnginx->request_buf_len, pwebnginx->request_buf_offset);
          mg_log_event(&(mg_system.log), NULL, bufferx, "mg_payload_handler: memory_chain", 0);
       }
 */
+
 /*
       while (cl) {
          buf = cl->buf;
@@ -1591,6 +1647,7 @@ __try {
             }
          }
          if (!pwebnginx->request_head) { /* end of buffer chain */
+            pweb->request_read_status = 1; /* v2.8.37 End of (chunked) Request Data */
             break;
          }
          /* this chain element */
