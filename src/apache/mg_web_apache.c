@@ -184,7 +184,7 @@ static int mg_handler(request_rec *r)
 {
    int retval;
    long n1;
-   unsigned int n;
+   unsigned int n, request_chunked;
    unsigned long request_clen;
    char *pval;
    unsigned char buffer[MG_RBUFFER_SIZE];
@@ -294,6 +294,7 @@ __try {
       return retval;
 */
 
+   /* v2.8.37 */
    if ((retval = ap_setup_client_block(r, REQUEST_CHUNKED_DECHUNK)))
       return retval;
 
@@ -310,7 +311,19 @@ __try {
    if (pval) {
       request_clen = (unsigned long) strtol(pval, NULL, 10);
    }
-   pweb = mg_obtain_request_memory((void *) pwebapache, (unsigned long) request_clen, MG_WS_APACHE); /* v2.7.33 */
+   /* v2.8.37 */
+   request_chunked = 0;
+   pval = (char *) apr_table_get(r->subprocess_env, "HTTP_TRANSFER_ENCODING");
+   if (pval) {
+      strcpy((char *) buffer, pval);
+      mg_lcase((char *) buffer);
+      if (strstr(buffer, "chunked")) {
+         request_chunked = 1;
+         request_clen = 0;
+      }
+   }
+
+   pweb = mg_obtain_request_memory((void *) pwebapache, (unsigned long) request_clen, request_chunked, MG_WS_APACHE); /* v2.7.33 */
    if (!pweb) {
       return HTTP_INTERNAL_SERVER_ERROR;
    }
@@ -1035,6 +1048,8 @@ __try {
          if (APR_BUCKET_IS_EOS(pwebapache->read_bucket)) {
             pwebapache->read_status = 1;
             pwebapache->read_eos = 1;
+            pweb->request_read_status = 1; /* v2.8.37 */
+            /* mg_log_event(pweb->plog, pweb, "*** End of Request Data ***", (char *) "mg_client_read", 0); */
             break;
          }
 
@@ -1047,7 +1062,13 @@ __try {
             /* Usually 8K read */
 
             total = buffer_size - result;
-
+/*
+            {
+               char bufferx[1024];
+               sprintf(bufferx, "HTTP Request: read_data_size=%d; buffer_size=%d; request_read_status=%d;", (int) pwebapache->read_data_size, buffer_size, pweb->request_read_status);
+               mg_log_event(pweb->plog, pweb, bufferx, (char *) "mg_client_read", 0);
+            }
+*/
             if (pwebapache->read_data_size > 0) {
 
                if (pwebapache->read_data_size >= total) {
@@ -1085,8 +1106,7 @@ __try {
          break;
    }
 
-
-   return 0;
+   return result;
 
 #ifdef _WIN32
 }
