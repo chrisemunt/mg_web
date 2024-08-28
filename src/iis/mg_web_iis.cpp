@@ -96,7 +96,9 @@ public:
    REQUEST_NOTIFICATION_STATUS OnExecuteRequestHandler(IN IHttpContext * pHttpContext, IN IHttpEventProvider * pProvider)
    {
       UNREFERENCED_PARAMETER( pProvider );
+      int request_chunked;
       unsigned long request_clen;
+      char buffer[256];
       DWORD size;
       MGWEB *pweb;
       MGWEBIIS mgwebiis, *pwebiis;
@@ -122,11 +124,29 @@ public:
 
       pwebiis->rbuffer = (PCSTR) pHttpContext->AllocateRequestMemory(RBUFFER_SIZE);
 
+      request_clen = 0;
       size = 32;
       hr = ((IHttpContext *) pwebiis->phttp_context)->GetServerVariable("CONTENT_LENGTH", (PCSTR *) &(pwebiis->rbuffer), &size);
-      request_clen = (unsigned long) strtol((char *) pwebiis->rbuffer, NULL, 10);
+      if (SUCCEEDED(hr)) {
+         request_clen = (unsigned long) strtol((char *) pwebiis->rbuffer, NULL, 10);
+      }
+      /* v2.8.37 */
+      request_chunked = 0;
+      size = 128;
+      buffer[0] = '\0';
+      hr = ((IHttpContext *) pwebiis->phttp_context)->GetServerVariable("HTTP_TRANSFER_ENCODING", (PCSTR *) &(pwebiis->rbuffer), &size);
+      if (SUCCEEDED(hr)) {
+         if (size > 0 && size < 128) {
+            strcpy_s(buffer, size + 1, (char *) pwebiis->rbuffer);
+         }
+         mg_lcase((char *) buffer);
+         if (strstr(buffer, "chunked")) {
+            request_chunked = 1;
+            request_clen = 0;
+         }
+      }
 
-      pweb = mg_obtain_request_memory((void *) pwebiis, request_clen, MG_WS_IIS); /* v2.7.33 */
+      pweb = mg_obtain_request_memory((void *) pwebiis, request_clen, request_chunked, MG_WS_IIS); /* v2.7.33 */
 
       pweb->pweb_server = (void *) pwebiis;
       pweb->evented = 0;
@@ -423,6 +443,7 @@ __try {
       bytes_received = (buffer_size - total);
 	   /* Retrieve the byte count for the request. */
       byte_count = ((IHttpRequest *) ((MGWEBIIS *) pweb->pweb_server)->phttp_request)->GetRemainingEntityBytes();
+
 	   /* Retrieve the request body. */
       hr = ((IHttpRequest *) ((MGWEBIIS *) pweb->pweb_server)->phttp_request)->ReadEntityBody((void *) (pbuffer + total), bytes_received, false, &bytes_received, NULL);
       /* Test for an error. */
@@ -452,23 +473,28 @@ __try {
          ((IHttpEventProvider *) ((MGWEBIIS *) pweb->pweb_server)->pprovider)->SetErrorStatus(hr);
          /* End additional processing. */
          ((MGWEBIIS *) pweb->pweb_server)->exit_code = MGWEB_RQ_NOTIFICATION_FINISH_REQUEST;
-         result = -1;
+         pweb->request_read_status = -1;
 		}
       else { /* End of data */
-         result = 0;
+         pweb->request_read_status = 1;
       }
 	}
-	else if (total > 0) {
+	if (total > 0) {
       pbuffer[total] = '\0';
       result = (int) total;
 	}
+
 /*
    {
       char buffer[256];
-      sprintf_s(buffer, 255, "buffer_size=%d; total=%d;", buffer_size, result);
+      sprintf_s(buffer, 255, "buffer_size=%d; total=%d; pweb->request_read_status=%d;", buffer_size, result, pweb->request_read_status);
       mg_log_event(pweb->plog, pweb, buffer, "mg_client_read", 0);
+      if (total > 0) {
+         mg_log_buffer(pweb->plog, pweb, (char *) pbuffer, total, "mg_client_read: buffer", 0);
+      }
    }
 */
+
    return result;
 
 #ifdef _WIN32
