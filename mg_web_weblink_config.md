@@ -143,7 +143,7 @@ Paste the code below into it:
            set %rc=$$nvpair^%zmgsis(.%KEY,$get(%CGIEVAR("QUERY_STRING")))
            set %rc=$$content^%zmgsis(.%KEY,.%KEYHEAD,.%content,.%CGIEVAR)
            set %KEY("MGWLPN")=$get(%sys("server"))
-           set %KEY("MGWCHD")=0
+           set %KEY("MGWCHD")=$get(%sys("server_no"))
            set %KEY("MGWUCI")=$$getuci^%zmgsis()
            set %KEY("MGWNSP")=%KEY("MGWUCI")
            set %KEY("MGWLIB")=$get(%CGIEVAR("SCRIPT_NAME"))
