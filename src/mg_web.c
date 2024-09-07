@@ -193,6 +193,12 @@ Version 2.7.36 21 June 2024:
 Version 2.8.37 28 August 2024:
    Introduce support for chunked request payloads.
    - HTTP_TRANSFER_ENCODING=="chunked"
+
+Version 2.8.38 7 September 2024:
+   Ensure that excessive amounts of memory are not allocated for large response payloads where chunking is disabled in the mg_web configuration.
+   - If chunking cannot be used for request payloads over 500K, the payload will be streamed back with a 'Connection: close' response header added.
+   - The end of the stream will be marked by the server closing the connection.
+
 */
 
 
@@ -242,7 +248,8 @@ __try {
 #endif
 
    pweb->plog = mg_system.plog;
-   pweb->response_chunked = 0; /* 2.0.8 */
+   pweb->response_chunked = 0; /* v2.0.8 */
+   pweb->response_maxclen = 0; /* v2.8.38 */
 
    if (!mg_server || !mg_path || mg_system.config_error[0]) {
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
@@ -854,6 +861,16 @@ mg_web_process_failover:
                else
                   strcpy(buffer, "\r\n\r\n");
             }
+            else if (pweb->response_streamed && pweb->response_maxclen && pweb->response_remaining > 0) { /* v2.8.38 */
+               strcpy(buffer, "\r\nConnection: close\r\n\r\n");
+               pweb->wserver_chunks_response = 1; /* Effectively turn off chunking */
+/*
+               if (pweb->wserver_chunks_response == 0)
+                  strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
+               else
+                  strcpy(buffer, "\r\n\r\n");
+*/
+            }
             else {
                pweb->response_streamed = 0;
                sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
@@ -861,6 +878,7 @@ mg_web_process_failover:
             len = (int) strlen(buffer);
             strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
             pweb->response_headers_len += len;
+            /* mg_log_event(pweb->plog, pweb, pweb->response_headers, "Parsed Response Headers", 0); */
          }
       }
    }
@@ -1166,7 +1184,7 @@ __try {
             else if (strstr(head, "cache-control")) {
                pweb->response_cache_control = pn;
             }
-            else if (strstr(head, "connection")) {
+            else if (strstr(head, "connection")) { /* v2.8.38 */
                pweb->response_connection = pn;
             }
          }
@@ -3047,7 +3065,7 @@ __try {
       len_alloc = DBX_LS_BUFFER_ISC;
    }
 
-   pweb = (MGWEB *) mg_malloc(pweb_server, sizeof(MGWEB) + (len_alloc + 32), 0); /* v2.5.31 */
+   pweb = (MGWEB *) mg_malloc(pweb_server, sizeof(MGWEB) + (len_alloc + 32), 1); /* v2.5.31 */
    if (!pweb) {
       return NULL;
    }
@@ -3124,7 +3142,7 @@ __try {
 
    len_alloc = 128000;
 
-   pval = (DBXVAL *) mg_malloc(pweb->pweb_server, sizeof(DBXVAL) + (len_alloc + 32), 0); /* v2.5.31 */
+   pval = (DBXVAL *) mg_malloc(pweb->pweb_server, sizeof(DBXVAL) + (len_alloc + 32), 2); /* v2.5.31 */
    if (!pval) {
       return NULL;
    }
@@ -3188,10 +3206,10 @@ __try {
       pval = pvalnext; 
    }
    if (pweb->request_cookie) { /* v2.1.10 */
-      mg_free(pweb->pweb_server, (void *) pweb->request_cookie, 0); /* v2.5.31 */
+      mg_free(pweb->pweb_server, (void *) pweb->request_cookie, 1); /* v2.5.31 */
    }
 
-   mg_free(pweb->pweb_server, pweb, 0);
+   mg_free(pweb->pweb_server, pweb, 2);
 
    return 0;
 
@@ -3629,7 +3647,7 @@ __try {
    *sname = '\0';
    found = 0;
    len = 4096;
-   pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, 0); /* v2.5.31 */
+   pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, 3); /* v2.5.31 */
    DBX_TRACE(1)
    if (!pweb->request_cookie) {
       return server_no;
@@ -3641,9 +3659,9 @@ __try {
       DBX_TRACE(3)
       if (rc == MG_CGI_TOOLONG) {
          DBX_TRACE(4)
-         mg_free(NULL, (void *) pweb->request_cookie, 0);
+         mg_free(NULL, (void *) pweb->request_cookie, 3);
          len = (n + 2) * 4096;
-         pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, 0);
+         pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, 4);
          if (!pweb->request_cookie) {
             break;
          }
@@ -3864,7 +3882,7 @@ __try {
 */
    mg_init_critical_section((void *) &mg_global_mutex);
 
-   mg_system.config = (char *) mg_malloc(NULL, size + size_default + 32, 0);
+   mg_system.config = (char *) mg_malloc(NULL, size + size_default + 32, 5);
    if (!mg_system.config) {
       mg_system.plog = &(mg_system.log);
       mg_system.log.req_no = 0;
@@ -4125,7 +4143,7 @@ __try {
                      len --;
                      word[1][len] = '\0';
                   }
-                  psrv = (MGSRV *) mg_malloc(NULL, sizeof(MGSRV), 0);
+                  psrv = (MGSRV *) mg_malloc(NULL, sizeof(MGSRV), 6);
                   if (!psrv) {
                      strcpy(mg_system.config_error, "Memory allocation error (MGSRV)");
                      break;
@@ -4169,7 +4187,7 @@ __try {
                      word[1][len ++] = '/';
                      word[1][len] = '\0';
                   }
-                  ppath = (MGPATH *) mg_malloc(NULL, sizeof(MGPATH), 0);
+                  ppath = (MGPATH *) mg_malloc(NULL, sizeof(MGPATH), 7);
                   if (!ppath) {
                      strcpy(mg_system.config_error, "Memory allocation error (MGPATH)");
                      break;
@@ -4209,7 +4227,7 @@ __try {
                      len --;
                      word[1][len] = '\0';
                   }
-                  ptls = (MGTLS *) mg_malloc(NULL, sizeof(MGTLS), 0);
+                  ptls = (MGTLS *) mg_malloc(NULL, sizeof(MGTLS), 8);
                   if (!ptls) {
                      strcpy(mg_system.config_error, "Memory allocation error (MGTLS)");
                      break;
@@ -4252,7 +4270,7 @@ __try {
             if (inserver) {
                if (inenv) {
                   if (!psrv->penv) {
-                     psrv->penv = (MGBUF *) mg_malloc(NULL, sizeof(MGBUF), 0);
+                     psrv->penv = (MGBUF *) mg_malloc(NULL, sizeof(MGBUF), 9);
                      if (!psrv->penv) {
                         strcpy(mg_system.config_error, "Memory allocation error (MGBUF:ENV)");
                         break;
@@ -4332,7 +4350,7 @@ __try {
                   }
                   else if (!strcmp(word[0], "websocket")) { /* v2.6.32 */
                      if (wn > 2) {
-                        pwsmap = (MGWSMAP *) mg_malloc(NULL, sizeof(MGWSMAP), 0);
+                        pwsmap = (MGWSMAP *) mg_malloc(NULL, sizeof(MGWSMAP), 10);
                         if (pwsmap) {
                            pwsmap->name = word[1];
                            pwsmap->name_len = (int) strlen(pwsmap->name);
@@ -4662,7 +4680,7 @@ int mg_verify_config()
 __try {
 #endif
 
-   pbuf = (char *) mg_malloc(NULL, 8192, 0);
+   pbuf = (char *) mg_malloc(NULL, 8192, 11);
    
    psrv = mg_server;
    if (!psrv) {
@@ -4872,7 +4890,7 @@ mg_verify_config_exit:
    }
 
    if (pbuf) {
-      mg_free(NULL, pbuf, 0);
+      mg_free(NULL, pbuf, 4);
    }
 
    return 0;
@@ -5566,7 +5584,7 @@ int isc_open(MGWEB *pweb)
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_isc_so) {
-      pcon->p_isc_so = (DBXISCSO *) mg_malloc(NULL, sizeof(DBXISCSO), 0);
+      pcon->p_isc_so = (DBXISCSO *) mg_malloc(NULL, sizeof(DBXISCSO), 12);
       if (!pcon->p_isc_so) {
          strcpy(pweb->error, "No Memory");
          pweb->error_code = 1009;
@@ -6144,7 +6162,7 @@ int ydb_open(MGWEB *pweb)
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_ydb_so) {
-      pcon->p_ydb_so = (DBXYDBSO *) mg_malloc(NULL, sizeof(DBXYDBSO), 0);
+      pcon->p_ydb_so = (DBXYDBSO *) mg_malloc(NULL, sizeof(DBXYDBSO), 13);
       if (!pcon->p_ydb_so) {
          strcpy(pweb->error, "No Memory");
          pweb->error_code = 1009; 
@@ -6460,7 +6478,7 @@ int gtm_open(MGWEB *pweb)
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_gtm_so) {
-      pcon->p_gtm_so = (DBXGTMSO *) mg_malloc(NULL, sizeof(DBXGTMSO), 0);
+      pcon->p_gtm_so = (DBXGTMSO *) mg_malloc(NULL, sizeof(DBXGTMSO), 14);
       if (!pcon->p_gtm_so) {
          strcpy(pweb->error, "No Memory");
          pweb->error_code = 1009; 
@@ -6628,14 +6646,14 @@ int mg_buf_init(MGBUF *p_buf, int size, int increment_size)
 {
    int result;
 
-   p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char) * (size + 1), 0);
+   p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char) * (size + 1), 15);
    if (p_buf->p_buffer) {
       *(p_buf->p_buffer) = '\0';
       result = 1;
    }
    else {
       result = 0;
-      p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char), 0);
+      p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char), 16);
       if (p_buf->p_buffer) {
          *(p_buf->p_buffer) = '\0';
          size = 1;
@@ -6673,7 +6691,7 @@ int mg_buf_free(MGBUF *p_buf)
       return 0;
 
    if (p_buf->p_buffer)
-      mg_free(NULL, (void *) p_buf->p_buffer, 0);
+      mg_free(NULL, (void *) p_buf->p_buffer, 5);
 
    p_buf->p_buffer = NULL;
    p_buf->size = 0;
@@ -6745,7 +6763,7 @@ int mg_buf_cat(MGBUF *p_buf, char *buffer, unsigned long size)
          if (p_temp) {
             memcpy((void *) p_buf->p_buffer, (void *) p_temp, tsize);
             p_buf->data_size = tsize;
-            mg_free(NULL, (void *) p_temp, 0);
+            mg_free(NULL, (void *) p_temp, 6);
          }
       }
       else
@@ -6775,7 +6793,14 @@ void * mg_malloc(void *pweb_server, int size, short id)
       p = (void *) malloc(size);
 #endif
    }
-
+/* v2.8.38 */
+/*
+   {
+      char buffer[256];
+      sprintf(buffer, "pweb_server=%p; p=%p; size=%d; id=%d;", pweb_server, p, size, id);
+      mg_log_event(&(mg_system.log), NULL, buffer, "mg_web: mg_malloc", 0);
+   }
+*/
    /* printf("\nmg_malloc: size=%d; id=%d; p=%p;", size, id, p); */
 
    return p;
@@ -6784,13 +6809,21 @@ void * mg_malloc(void *pweb_server, int size, short id)
 
 void * mg_realloc(void *pweb_server, void *p, int curr_size, int new_size, short id)
 {
+/* v2.8.38 */
+/*
+   {
+      char buffer[256];
+      sprintf(buffer, "pweb_server=%p; p=%p; curr_size=%d; new_size=%d; id=%d;", pweb_server, p, curr_size, new_size, id);
+      mg_log_event(&(mg_system.log), NULL, buffer, "mg_web: mg_realloc", 0);
+   }
+*/
    if (mg_ext_realloc && pweb_server) {
       p = (void *) mg_ext_realloc(pweb_server, (void *) p, (unsigned long) new_size);
    }
    else {
       if (new_size >= curr_size) {
          if (p) {
-            mg_free(NULL, (void *) p, 0);
+            mg_free(NULL, (void *) p, 7);
          }
 
 #if defined(_WIN32)
@@ -6810,6 +6843,15 @@ void * mg_realloc(void *pweb_server, void *p, int curr_size, int new_size, short
 int mg_free(void *pweb_server, void *p, short id)
 {
    /* printf("\nmg_free: id=%d; p=%p;", id, p); */
+
+/* v2.8.38 */
+/*
+{
+   char buffer[256];
+   sprintf(buffer, "pweb_server=%p; p=%p; id=%d;", pweb_server, p, id);
+   mg_log_event(&(mg_system.log), NULL, buffer, "mg_web: mg_free", 0);
+}
+*/
 
    if (mg_ext_free && pweb_server) {
       mg_ext_free(pweb_server, (void *) p);
@@ -8671,11 +8713,19 @@ __try {
                break;
             }
             else {
-               /* 2.0.8 */
-               pval = mg_extend_response_memory(pweb);
-               if (!pval) {
-                  rc = NETX_READ_ERROR;
+               if (pweb->response_size > DBX_MAXCLEN) { /* v2.8.38 */
+                  /* Can't read the whole response to generate a 'Content-Length', so revert to streaming with a 'Connection: close' */
+                  pweb->response_maxclen = 1;
+                  rc = CACHE_SUCCESS;
                   break;
+               }
+               else {
+                  /* 2.0.8 */
+                  pval = mg_extend_response_memory(pweb);
+                  if (!pval) {
+                     rc = NETX_READ_ERROR;
+                     break;
+                  }
                }
             }
          }
@@ -8750,11 +8800,19 @@ __try {
             break;
          }
          else {
-            /* 2.0.8 */
-            pval = mg_extend_response_memory(pweb);
-            if (!pval) {
-               rc = NETX_READ_ERROR;
+            if (pweb->response_size > DBX_MAXCLEN) { /* v2.8.38 */
+               /* Can't read the whole response to generate a 'Content-Length', so revert to streaming with a 'Connection: close' */
+               pweb->response_maxclen = 1;
+               rc = CACHE_SUCCESS;
                break;
+            }
+            else {
+               /* 2.0.8 */
+               pval = mg_extend_response_memory(pweb);
+               if (!pval) {
+                  rc = NETX_READ_ERROR;
+                  break;
+               }
             }
          }
       }

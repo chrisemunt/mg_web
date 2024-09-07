@@ -323,6 +323,8 @@ typedef int    xc_status_t;
 #define DBX_LS_MAXSIZE_YDB       1048576
 #define DBX_LS_BUFFER_YDB        1048577
 
+#define DBX_MAXCLEN              400000
+
 #if defined(MAX_PATH) && (MAX_PATH>511)
 #define DBX_MAX_PATH             MAX_PATH
 #else
@@ -1305,6 +1307,7 @@ typedef struct tagMGWEB {
    int            response_clen_server;
    int            response_streamed;
    int            response_chunked;
+   int            response_maxclen; /* v2.8.38 */
    int            response_clen;
    unsigned int   response_size;
    unsigned int   response_remaining;
