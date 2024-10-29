@@ -357,7 +357,7 @@ mgtls_open_session_exit:
    }
 
    if (rc == CACHE_SUCCESS) {
-      ptlscon = (DBXTLSCON *) mg_malloc(NULL, sizeof(DBXTLSCON), 0);
+      ptlscon = (DBXTLSCON *) mg_malloc(NULL, sizeof(DBXTLSCON), 101);
       if (!ptlscon) {
          if (!pweb->error[0]) {
             strcpy(pweb->error, "No Memory");
@@ -517,7 +517,7 @@ int mgtls_crypt_load_library(MGWEB *pweb)
    if (!mg_crypt_so) {
       mg_enter_critical_section((void *) &mg_global_mutex);
       if (!mg_crypt_so) {
-         mg_crypt_so = (DBXCRYPTSO *) mg_malloc(NULL, sizeof(DBXCRYPTSO), 0);
+         mg_crypt_so = (DBXCRYPTSO *) mg_malloc(NULL, sizeof(DBXCRYPTSO), 102);
          if (!mg_crypt_so) {
             mg_leave_critical_section((void *) &mg_global_mutex);
             if (!pweb->error[0]) {
@@ -839,7 +839,7 @@ int mgtls_tls_load_library(MGWEB *pweb)
    if (!mg_tls_so) {
       mg_enter_critical_section((void *) &mg_global_mutex);
       if (!mg_tls_so) {
-         mg_tls_so = (DBXTLSSO *) mg_malloc(NULL, sizeof(DBXTLSSO), 0);
+         mg_tls_so = (DBXTLSSO *) mg_malloc(NULL, sizeof(DBXTLSSO), 103);
          if (!mg_tls_so) {
             mg_leave_critical_section((void *) &mg_global_mutex);
             if (!pweb->error[0]) {
