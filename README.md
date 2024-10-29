@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-7 September 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+28 October 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 38.
+* Current Release: Version: 2.8; Revision 39.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -340,3 +340,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Ensure that excessive amounts of memory are not allocated for large response payloads where chunking is disabled in the **mg\_web** configuration.
 	* If chunking cannot be used for request payloads over 500K, the payload will be streamed back with a 'Connection: close' response header added.
 	* The end of the stream will be marked by the server closing the connection.
+
+### v2.8.39 (28 October 2024)
+
+* Ensure that global resources held by **mg\_web** are explicitly released when hosting web server worker processes are closed down.
+
