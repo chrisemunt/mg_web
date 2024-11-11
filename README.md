@@ -3,7 +3,7 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-28 October 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+11 November 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
 * Current Release: Version: 2.8; Revision 39.
 * [Release Notes](#relnotes) can be found at the end of this document.
@@ -345,3 +345,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 * Ensure that global resources held by **mg\_web** are explicitly released when hosting web server worker processes are closed down.
 
+### v2.8.40 (11 November 2024)
+
+* Add extra checks to ensure that an application returns a valid HTTP response header with its forms.  If a form's header is found to be faulty (or missing), **mg\_web** will return a basic HTTP header to the client.
