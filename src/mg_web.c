@@ -202,6 +202,10 @@ Version 2.8.38 7 September 2024:
 Version 2.8.39 28 October 2024:
    Ensure that global resources are explicitly released when hosting web server worker processes are closed down.
 
+Version 2.8.40 11 November 2024:
+   Add extra checks to ensure that an application returns a valid HTTP response header with its forms.
+   - If a form's header is found to be faulty (or missing), return the default HTTP header to the client.
+
 */
 
 
@@ -775,7 +779,12 @@ mg_web_process_failover:
    get = 0;
    if (rc == CACHE_SUCCESS) {
       pweb->response_headers = pweb->output_val.svalue.buf_addr + 10;
-      p = (unsigned char *) strstr(pweb->response_headers, "\x0d\x0a\x0d\x0a");
+      if (strncmp(pweb->response_headers, "HTTP/", 5)) { /* v2.8.40 */
+         p = NULL;
+      }
+      else {
+         p = (unsigned char *) strstr(pweb->response_headers, "\x0d\x0a\x0d\x0a");
+      }
       if (p) {
          *p = '\0';
          pweb->response_content = (char *) (p + 4);
