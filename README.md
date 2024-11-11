@@ -5,7 +5,7 @@ A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaS
 Chris Munt <cmunt@mgateway.com>  
 11 November 2024, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 39.
+* Current Release: Version: 2.8; Revision 40.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
