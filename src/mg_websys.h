@@ -30,7 +30,7 @@
 #define MG_WEBSYS_H
 
 /* Set this symbol to 1 to include TLS functionality */
-#define DBX_WITH_TLS             1
+#define DBX_WITH_TLS             0
 
 #define MAJORVERSION             2
 #define MINORVERSION             8
