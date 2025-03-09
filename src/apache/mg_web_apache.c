@@ -4,7 +4,7 @@
    | Description: Apache HTTP Gateway for InterSystems Cache/IRIS and YottaDB |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2024 MGateway Ltd                                     |
+   | Copyright (c) 2019-2025 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -47,6 +47,7 @@
 #include "apr_base64.h"
 #include "apr_sha1.h"
 #include "util_ebcdic.h"
+//#include "apr_arch_networkio.h"
 
 #include "mg_web.h"
 #include "mg_websocket.h"
@@ -968,6 +969,55 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
+/* v2.8.41 */
+int mg_client_gone(MGWEB *pweb)
+{
+   int rc, len;
+   char buf[8];
+   apr_status_t rstat;
+   apr_socket_t *csd;
+   apr_interval_time_t t_old, t_new;
+   MGWEBAPACHE *pwebapache;
+
+   pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
+
+   csd = ap_get_conn_socket(pwebapache->r->connection);
+
+   len = 0;
+   t_old = 0;
+   t_new = 0;
+   rstat = APR_SUCCESS;
+
+   if (csd) {
+      apr_socket_timeout_get(csd, &t_old);
+      t_new = apr_time_from_sec(1);
+      apr_socket_timeout_set(csd, t_new);
+      apr_socket_opt_set(csd, APR_SO_NONBLOCK, 1);
+
+      len = 4;
+      rstat = apr_socket_recv(csd, (char *) buf, (apr_size_t *) &len);
+
+      /* apr_strerror(rstat, message, (apr_size_t) 500); */
+
+      apr_socket_timeout_set(csd, t_old);
+      apr_socket_opt_set(csd, APR_SO_NONBLOCK, 0);
+   }
+
+   rc = 0;
+   if (pwebapache->r->connection->aborted || APR_STATUS_IS_ECONNABORTED(rstat) || APR_STATUS_IS_ECONNRESET(rstat) || APR_STATUS_IS_EOF(rstat)) {
+      rc = 1;
+   }
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: rc=%d; r->connection->aborted=%d; rstat=%d; APR_STATUS_IS_EAGAIN=%d; APR_STATUS_IS_ECONNABORTED=%d; APR_STATUS_IS_ECONNRESET=%d; APR_STATUS_IS_EPIPE=%d; APR_STATUS_IS_EOF=%d; len=%d; t_old=%ld; t_new=%ld;", rc, pwebapache->r->connection->aborted, rstat, APR_STATUS_IS_EAGAIN(rstat), APR_STATUS_IS_ECONNABORTED(rstat), APR_STATUS_IS_ECONNRESET(rstat), APR_STATUS_IS_EPIPE(rstat), APR_STATUS_IS_EOF(rstat), len, (long int) t_old, (long int) t_new);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web mg_client_gone", 0);
+}
+*/
+   return rc;
+}
+
+
 int mg_client_read(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
 {
    short done;
@@ -1179,6 +1229,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 /* v2.7.33 */
 int mg_client_write_now(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
 {
+   int rc, bytes_sent;
    MGWEBAPACHE *pwebapache;
 
 #ifdef _WIN32
@@ -1187,14 +1238,28 @@ __try {
 
    pwebapache = (MGWEBAPACHE *) pweb->pweb_server;
 
-   ap_rwrite((void *) pbuffer, buffer_size, pwebapache->r);
+   /* v2.8.41 */
+
+   rc = 0;
+   bytes_sent = ap_rwrite((void *) pbuffer, buffer_size, pwebapache->r);
+   if (bytes_sent != buffer_size || pwebapache->r->connection->aborted) {
+      rc = -1;
+   }
+   else {
+      rc = bytes_sent;
+   }
 
    ap_rflush(pwebapache->r);
+
 /*
-   mg_log_buffer(pweb->plog, pweb, pbuffer, buffer_size, "mgweb: response", 0);
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: websocket buffer_size=%d; bytes_sent=%d; rc=%d; r->connection->aborted=%d;", (int) buffer_size, (int) bytes_sent, rc, pwebapache->r->connection->aborted);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web mg_client_write_now", 0);
+}
 */
 
-   return 0;
+   return rc;
 
 #ifdef _WIN32
 }
