@@ -4,7 +4,7 @@
    | Description: Nginx HTTP Gateway for InterSystems Cache/IRIS and YottaDB  |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2024 MGateway Ltd                                     |
+   | Copyright (c) 2019-2025 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -1550,6 +1550,50 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
+/* v2.8.41 */
+int mg_client_gone(MGWEB *pweb)
+{
+   int rc;
+/*
+   char buf[4];
+   ngx_event_t *rev, *wev;
+*/
+   MGWEBNGINX *pwebnginx;
+
+   pwebnginx = (MGWEBNGINX *) pweb->pweb_server;
+/*
+   rev = pwebnginx->r->connection->read;
+   wev = pwebnginx->r->connection->write;
+*/
+   /* rc = pwebnginx->r->connection->recv(pwebnginx->r->connection, (u_char *) buf, 1); */
+
+   rc = 1;
+#if defined(MSG_DONTWAIT)
+   rc = recv(pwebnginx->r->connection->fd, NULL, 1, MSG_PEEK | MSG_DONTWAIT);
+#endif
+
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: rc=%d; rc1=%d; rev->closed=%d; rev->eof=%d; rev->error=%d; wev->closed=%d; wev->eof=%d; wev->error=%d; pwebnginx->r->close=%d; pwebnginx->r->error=%d", rc, rc1, (int) rev->closed, (int) rev->eof, (int) rev->error, (int) wev->closed, (int) wev->eof, (int) wev->error, pwebnginx->r->connection->close, pwebnginx->r->connection->error);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web mg_client_gone", 0);
+}
+*/
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: rc(MSG_PEEK)=%d; pwebnginx->r->close=%d; pwebnginx->r->error=%d", rc, pwebnginx->r->connection->close, pwebnginx->r->connection->error);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web mg_client_gone", 0);
+}
+*/
+
+   if (pwebnginx->r->connection->error != 0 || rc == 0) {
+      return 1;
+   }
+   return 0;
+}
+
+
 /* v2.2.18 */
 int mg_client_read(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
 {
@@ -1781,16 +1825,22 @@ int mg_client_write_now(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
 
    rc = 0;
    bytes_sent = mg_websocket_write(pweb, (char *) pbuffer, buffer_size);
-/*
-{
-   char bufferx[256];
-   sprintf(bufferx, "debug: websocket buffer_size=%d; bytes_sent=%d", (int) buffer_size, (int) bytes_sent);
-   mg_log_event(pweb->plog, pweb, bufferx, "mg_web mg_client_write_now", 0);
-}
-*/
+
+   /* v2.8.41 */
+
    if (bytes_sent != buffer_size) {
       rc = -1;
    }
+   else {
+      rc = bytes_sent;
+   }
+/*
+{
+   char bufferx[256];
+   sprintf(bufferx, "debug: websocket buffer_size=%d; bytes_sent=%d; rc=%d", (int) buffer_size, (int) bytes_sent, rc);
+   mg_log_event(pweb->plog, pweb, bufferx, "mg_web mg_client_write_now", 0);
+}
+*/
    return rc;
 }
 
