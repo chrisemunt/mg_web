@@ -4,7 +4,7 @@
    | Description: HTTP Gateway for InterSystems Cache/IRIS and YottaDB        |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2024 MGateway Ltd                                     |
+   | Copyright (c) 2019-2025 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -206,6 +206,10 @@ Version 2.8.40 11 November 2024:
    Add extra checks to ensure that an application returns a valid HTTP response header with its forms.
    - If a form's header is found to be faulty (or missing), return the default HTTP header to the client.
 
+Version 2.8.41 9 March 2025:
+   Detect the 'client aborted' scenario for SSE channels.
+   - Send a termination message to the server ("\xff\xff\xff\xff\xff").
+   - For M servers use the $$clientgone^%zmgsis(.%sys) function to detect this termination message (returns 1 if the client has aborted, 0 otherwise).
 */
 
 
@@ -978,16 +982,25 @@ mg_web_process_failover:
 
       p = (unsigned char *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + pweb->response_headers_len + 6));
       len = (pweb->output_val.svalue.len_alloc - (pweb->output_val.svalue.len_used + pweb->response_headers_len + 6));
+      get = 0;
 
       while (1) {
-         rc = netx_tcp_read(pweb, (unsigned char *) p, len, 86400, 0);
+         rc = netx_tcp_read(pweb, (unsigned char *) p, len, 60, 0); /* v2.8.41: was 86400 */
 /*
          {
             char bufferx[256];
             sprintf(bufferx, "SSE Data: rc=%d; len=%d;", rc, len);
-            mg_log_buffer(pweb->plog, pweb, p, (rc > 0 ? rc : 0), bufferx, 0);
+            mg_log_buffer(pweb->plog, pweb, (char *) p, (rc > 0 ? rc : 0), bufferx, 0);
          }
 */
+         if (rc == NETX_READ_TIMEOUT) { /* v2.8.41 */
+            if (mg_client_gone(pweb)) {
+               /* mg_log_event(pweb->plog, pweb, "*** client gone (post DBServer timeout test) ***", "SSE Message", 0); */
+               break;
+            }
+            continue;
+         }
+
          if (rc < 1) { /* v2.7.34 */
             break;
          }
@@ -1004,11 +1017,15 @@ mg_web_process_failover:
             *(p + (rc + 1)) = '\n';
             rc += 2;
             /* mg_log_buffer(pweb->plog, pweb, (char *) p, rc, "SSE Data (Chunked)", 0); */
-            mg_client_write_now(pweb, (unsigned char *) p, (int) rc);
+            get = mg_client_write_now(pweb, (unsigned char *) p, (int) rc);
             p += (len1 + 2);
          }
          else {
-            mg_client_write_now(pweb, (unsigned char *) p, (int) rc);
+            get = mg_client_write_now(pweb, (unsigned char *) p, (int) rc);
+         }
+         if (get < 1) {
+            /* mg_log_event(pweb->plog, pweb, "*** client gone (cannot write to client) ***", "SSE Message", 0); */
+            break;
          }
       }
 
@@ -1022,11 +1039,21 @@ mg_web_process_failover:
       if (pweb->pcon) {
          pweb->pcon->no_requests ++;
       }
+
+      get = netx_tcp_write(pweb, (unsigned char *) "\xff\xff\xff\xff\xff", 5);
+/*
+      {
+         char bufferx[256];
+         sprintf(bufferx, "netx_tcp_write: fired a 0xff*5 result=%d;", get);
+         mg_log_event(pweb->plog, pweb, bufferx, "SSE", 0);
+      }
+*/
+      mg_sleep(10000); /* give server a chance to cleanup. */
       close_connection = 1;
       mg_release_connection(pweb, close_connection);
-/*
-      mg_log_event(pweb->plog, pweb, "*** SSE connection closed ***", "SSE", 0);
-*/
+
+      /* mg_log_event(pweb->plog, pweb, "*** SSE connection closed ***", "SSE", 0); */
+
       return CACHE_SUCCESS;
    }
 

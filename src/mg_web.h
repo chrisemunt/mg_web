@@ -5,7 +5,7 @@
    |              and YottaDB API                                             |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2024 MGateway Ltd                                     |
+   | Copyright (c) 2019-2025 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -1375,6 +1375,7 @@ extern MG_FREE       mg_ext_free;
 
 /* From web server interface code page */
 int                     mg_get_cgi_variable           (MGWEB *pweb, char *name, char *pbuffer, int *pbuffer_size);
+int                     mg_client_gone                (MGWEB *pweb);
 int                     mg_client_write               (MGWEB *pweb, unsigned char *pbuffer, int buffer_size);
 int                     mg_client_write_now           (MGWEB *pweb, unsigned char *pbuffer, int buffer_size);
 int                     mg_client_read                (MGWEB *pweb, unsigned char *pbuffer, int buffer_size);
