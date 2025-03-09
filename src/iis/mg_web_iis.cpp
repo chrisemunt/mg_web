@@ -4,7 +4,7 @@
    | Description: IIS HTTP Gateway for InterSystems Cache/IRIS and YottaDB    |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2024 MGateway Ltd                                     |
+   | Copyright (c) 2019-2025 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -423,6 +423,20 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 #endif
 
+}
+
+
+/* v2.8.41 */
+int mg_client_gone(MGWEB *pweb)
+{
+   IHttpConnection * pHttpConnection = ((MGWEBIIS *) pweb->pweb_server)->phttp_context->GetConnection();
+
+   if (pHttpConnection != NULL) {
+      if (pHttpConnection->IsConnected() == FALSE) {
+         return 1;
+      }
+   }
+   return 0;
 }
 
 
