@@ -210,6 +210,10 @@ Version 2.8.41 9 March 2025:
    Detect the 'client aborted' scenario for SSE channels.
    - Send a termination message to the server ("\xff\xff\xff\xff\xff").
    - For M servers use the $$clientgone^%zmgsis(.%sys) function to detect this termination message (returns 1 if the client has aborted, 0 otherwise).
+
+Version 2.8.42 19 April 2025:
+   Protect against a memory violation that occasionally occurred after a failover event.
+   - Exception caught in f:mg_web_execute: c0000005:30
 */
 
 
@@ -829,8 +833,10 @@ mg_web_process_failover:
 */
       DBX_TRACE(40)
       p = (unsigned char *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4));
+      DBX_TRACE(401)
       strcpy((char *) p, pweb->response_headers);
       pweb->response_headers = (char *) p;
+      DBX_TRACE(402)
 
       mg_parse_headers(pweb);
 
@@ -926,7 +932,7 @@ mg_web_process_failover:
 /*
       {
          char bufferx[1024];
-         sprintf(bufferx, "response: rc=%d; pweb->output_val.svalue.len_used=%d;", rc, (int) pweb->output_val.svalue.len_used);
+         sprintf(bufferx, "response: rc=%d; pweb->output_val.svalue.len_used=%d; pweb->wserver_chunks_response=%d;", rc, (int) pweb->output_val.svalue.len_used, pweb->wserver_chunks_response);
          mg_log_event(pweb->plog, pweb, (char *) bufferx, "Error from mg_web_execute", 0);
       }
 */
@@ -951,7 +957,8 @@ mg_web_process_failover:
       }
       get = pweb->response_clen;
       pweb->response_remaining = 0;
-      if (pweb->pcon->net_connection) {
+      pweb->wserver_chunks_response = 1; /* v2.8.42 supress chunking */
+      if (pweb->pcon->connected) {
          close_connection = 1;
       }
    }
@@ -1316,7 +1323,7 @@ __try {
 */
    /* v2.1.10 */
 
-   if (pcon->net_connection) {
+   if (pcon->psrv->net_connection) { /* v2.8.42 */
       DBX_TRACE(10)
       memcpy((void *) pweb->mode, (void *) "tcp", (size_t) 3);
       rc = netx_tcp_command(pweb, DBX_CMND_FUNCTION, 0);
@@ -1543,7 +1550,7 @@ __try {
 
    len = mg_get_block_size((unsigned char *) pweb->output_val.svalue.buf_addr, 0, &(pweb->output_val.sort), &(pweb->output_val.type));
 
-   if (!pcon->net_connection) {
+   if (!pcon->psrv->net_connection) { /* v2.8.42 */
       MG_LOG_RESPONSE_FRAME(pweb, pweb->output_val.svalue.buf_addr, len);
       MG_LOG_RESPONSE_BUFFER(pweb, pweb->output_val.svalue.buf_addr, pweb->output_val.svalue.buf_addr, pweb->output_val.svalue.len_used);
    }
@@ -2404,7 +2411,8 @@ __try {
             pcon = pcon_free;
             pcon->alloc = 1;
             pcon->inuse = 1;
-            pcon->closed = 0;
+            /* pcon->closed = 0; v2.8.42 */
+            pcon->connected = 0; /* v2.8.42 */
             pcon->no_requests = 0;
          }
          else {
@@ -2419,7 +2427,8 @@ __try {
                }
                pcon->alloc = 1;
                pcon->inuse = 1;
-               pcon->closed = 0;
+               /* pcon->closed = 0; v2.8.42 */
+               pcon->connected = 0; /* v2.8.42 */
                pcon->time_request = 0; /* v2.4.26 */
                pcon->no_requests = 0;
                pcon->int_pipe[0] = 0;
@@ -2470,7 +2479,7 @@ __try {
       idle_time = (int) difftime(time_now, pcon->time_request);
       if (idle_time > (psrv->idle_timeout - 5)) {
          use_existing = 0;
-         netx_tcp_disconnect(pweb, 1);
+         netx_tcp_disconnect(pweb, 0);
 /*
          {
             char buffer[256];
@@ -2503,8 +2512,8 @@ __try {
       return CACHE_SUCCESS;
    }
 
-   pcon->net_connection = 0;
-   pcon->closed = 0;
+   pcon->connected = 0;
+   /* pcon->closed = 0; v2.8.42 */
    pcon->timeout = psrv->timeout;
    pcon->current_timeout = 0;
 
@@ -2886,7 +2895,7 @@ __try {
          con_retry_no ++;
          if (pcon->psrv->con_retry_no > 0 && con_retry_no > pcon->psrv->con_retry_no) {
             con_retry_no = pcon->psrv->con_retry_no;
-            sprintf(bufferx, "Cannot connect to DB Server %s after %d %s", pcon->psrv->name, con_retry_no, con_retry_no == 1 ? "attempt" : "attempts");
+            sprintf(bufferx, "Cannot connect to DB Server %s (%s:%d) after %d %s", pcon->psrv->name, pcon->psrv->ip_address, pcon->psrv->port, con_retry_no, con_retry_no == 1 ? "attempt" : "attempts");
             mg_log_event(pweb->plog, pweb, bufferx, "mg_connect: new connection attempt", 0);
             break;
          }
@@ -2894,13 +2903,13 @@ __try {
             time_now = time(NULL);
             con_retry_time = (int) difftime(time_now, time_start);
             if (con_retry_time > pcon->psrv->con_retry_time) {
-               sprintf(bufferx, "Cannot connect to DB Server %s after %d seconds", pcon->psrv->name, con_retry_time);
+               sprintf(bufferx, "Cannot connect to DB Server %s (%s:%d) after %d seconds", pcon->psrv->name, pcon->psrv->ip_address, pcon->psrv->port, con_retry_time);
                mg_log_event(pweb->plog, pweb, bufferx, "mg_connect: new connection attempt", 0);
                break;
             }
          }
          else {
-            sprintf(bufferx, "Cannot connect to DB Server %s after %d %s", pcon->psrv->name, con_retry_no, con_retry_no == 1 ? "attempt" : "attempts");
+            sprintf(bufferx, "Cannot connect to DB Server %s (%s:%d)  after %d %s", pcon->psrv->name, pcon->psrv->ip_address, pcon->psrv->port, con_retry_no, con_retry_no == 1 ? "attempt" : "attempts");
             mg_log_event(pweb->plog, pweb, bufferx, "mg_connect: new connection attempt", 0);
             break;
          }
@@ -2916,14 +2925,15 @@ __try {
       if (rc != CACHE_SUCCESS) {
          pweb->mg_connect_failed = 1;
          pcon->alloc = 0;
-         pcon->closed = 1;
+         pcon->connected = 0; /* v2.8.42 */
+         /* pcon->closed = 1; v2.8.42 */
          rc = CACHE_NOCON;
          mg_error_message(pweb, rc);
          return rc;
       }
  
       pcon->alloc = 1;
-      pcon->net_connection = 1; /* network connection */
+      pcon->connected = 1; /* network connection */
       return rc;
    }
 
@@ -3010,10 +3020,12 @@ __try {
       return rc;
    }
 
-   if (pcon->net_connection) {
-      rc = netx_tcp_disconnect(pweb, close_connection);
+   if (pcon->psrv->net_connection) { /* v2.8.42 */
+      DBX_TRACE(10)
+      rc = netx_tcp_disconnect(pweb, 0);
    }
    else if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
+      DBX_TRACE(20)
       if (pcon->p_ydb_so->loaded) {
          rc = pcon->p_ydb_so->p_ydb_exit();
          /* printf("\r\np_ydb_exit=%d\r\n", rc); */
@@ -3032,6 +3044,7 @@ __try {
       }
    }
    else {
+      DBX_TRACE(30)
       if (pcon->p_isc_so->loaded) {
          DBX_LOCK(0);
          rc = pcon->p_isc_so->p_CacheEnd();
@@ -3051,8 +3064,10 @@ __try {
       }
    }
 
-   pcon->net_connection = 0;
-   pcon->closed = 1;
+   DBX_TRACE(90)
+
+   pcon->connected = 0;
+   /* pcon->closed = 1; v2.8.42 */
    pcon->inuse = 0;
    pcon->alloc = 0;
 
@@ -4274,6 +4289,8 @@ __try {
                   /* v2.4.26 */
                   psrv->idle_timeout = 0;
                   psrv->health_check = 0;
+                  /* v2.8.42 default to network connection */
+                  psrv->net_connection = 1;
                   /* v2.4.25 */
                   psrv->con_retry_no = 0;
                   psrv->con_retry_time = 0;
@@ -7464,7 +7481,7 @@ int mg_cleanup(MGWEB *pweb)
    pcon = pweb->pcon;
    rc = CACHE_SUCCESS;
 
-   if (pcon->net_connection) {
+   if (pcon->psrv->net_connection) {
       return rc;
    }
    if (pcon->psrv->dbtype == DBX_DBTYPE_YOTTADB) {
@@ -7993,7 +8010,7 @@ int netx_tcp_connect(MGWEB *pweb, int context)
 
    pcon = pweb->pcon;
 
-   pcon->net_connection = 0;
+   pcon->connected = 0;
    pweb->error_no = 0;
    connected = 0;
    getaddrinfo_ok = 0;
@@ -8134,7 +8151,7 @@ int netx_tcp_connect(MGWEB *pweb, int context)
       if (pweb->error_no) {
          char message[256];
          netx_get_error_message(pweb->error_no, message, 250, 0);
-         sprintf(pweb->error, "Connection Error: Cannot Connect to DB Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, pweb->error_no, message);
+         sprintf(pweb->error, "Connection Error: Cannot Connect to DB Server %s (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->name, (char *) pcon->psrv->ip_address, pcon->psrv->port, pweb->error_no, message);
          n = -5;
       }
 
@@ -8147,8 +8164,8 @@ int netx_tcp_connect(MGWEB *pweb, int context)
 
    if (ipv6) {
       if (connected) {
-         pcon->net_connection = 1;
-         pcon->closed = 0;
+         pcon->connected = 1;
+         /* pcon->closed = 0; v2.8.42 */
          if (pweb->psrv->ptls) {
             n = mgtls_open_session(pweb);
             if (n != CACHE_SUCCESS) {
@@ -8168,7 +8185,7 @@ int netx_tcp_connect(MGWEB *pweb, int context)
 
             errorno = (int) netx_get_last_error(0);
             netx_get_error_message(errorno, message, 250, 0);
-            sprintf(pweb->error, "Connection Error: Cannot identify DB Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
+            sprintf(pweb->error, "Connection Error: Cannot identify DB Server %s (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->name, (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
             netx_tcp_disconnect(pweb, 0);
             return -5;
          }
@@ -8287,7 +8304,7 @@ int netx_tcp_connect(MGWEB *pweb, int context)
             netx_get_error_message(errorno, message, 250, 0);
 
             pweb->error_no = errorno;
-            sprintf(pweb->error, "Connection Error: Cannot Connect to DB Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
+            sprintf(pweb->error, "Connection Error: Cannot Connect to DB Server %s (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->name, (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
             n = -5;
             netx_tcp_disconnect(pweb, 0);
             continue;
@@ -8301,7 +8318,7 @@ int netx_tcp_connect(MGWEB *pweb, int context)
 
          netx_tcp_disconnect(pweb, 0);
 
-         strcpy(pweb->error, "Connection Error: Failed to find the DB Server via a DNS Lookup");
+         sprintf(pweb->error, "Connection Error: Failed to find the DB Server %s (%s:%d) via a DNS Lookup", (char *) pcon->psrv->name, (char *) pcon->psrv->ip_address, pcon->psrv->port);
 
          return n;
       }
@@ -8380,15 +8397,15 @@ int netx_tcp_connect(MGWEB *pweb, int context)
          errorno = (int) netx_get_last_error(0);
          netx_get_error_message(errorno, message, 250, 0);
          pweb->error_no = errorno;
-         sprintf(pweb->error, "Connection Error: Cannot Connect to DB Server (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
+         sprintf(pweb->error, "Connection Error: Cannot Connect to DB Server %s (%s:%d): Error Code: %d (%s)", (char *) pcon->psrv->name, (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
          n = -5;
          netx_tcp_disconnect(pweb, 0);
          return n;
       }
    }
 
-   pcon->net_connection = 1;
-   pcon->closed = 0;
+   pcon->connected = 1;
+   /* pcon->closed = 0; v2.8.42 */
 
    return CACHE_SUCCESS;
 }
@@ -8500,7 +8517,7 @@ int netx_tcp_ping(MGWEB *pweb, int context)
 /*
    {
       char bufferx[256];
-      sprintf(bufferx, "netx_tcp_ping RECV rc=%d; pcon->closed=%d;", rc, pcon->closed);
+      sprintf(bufferx, "netx_tcp_ping RECV rc=%d; pcon->connected=%d;", rc, pcon->connected);
       mg_log_buffer(&(mg_system.log), pweb, (char *) netbuf, rc, bufferx, 0);
    }
 */
@@ -8564,7 +8581,7 @@ __try {
 /*
    {
       char bufferx[256];
-      sprintf(bufferx, "netx_tcp_command SEND cmnd=%d; size=%d; netbuf_used=%d; requestno_in=%d; requestno_out=%d; pcon->closed=%d;", command, pweb->input_buf.len_used, netbuf_used, pweb->requestno_in, pweb->requestno_out, pcon->closed);
+      sprintf(bufferx, "netx_tcp_command SEND cmnd=%d; size=%d; netbuf_used=%d; requestno_in=%d; requestno_out=%d; pcon->connected=%d;", command, pweb->input_buf.len_used, netbuf_used, pweb->requestno_in, pweb->requestno_out, pcon->connected);
       mg_log_buffer(&(mg_system.log), pweb, netbuf, netbuf_used, bufferx, 0);
    }
 */
@@ -8638,7 +8655,7 @@ netx_tcp_command_reconnect:
 /*
    {
       char bufferx[256];
-      sprintf(bufferx, "netx_tcp_command RECV rc=%d; pcon->closed=%d;", rc, pcon->closed);
+      sprintf(bufferx, "netx_tcp_command RECV rc=%d; pcon->connected=%d;", rc, pcon->connected);
       mg_log_buffer(&(mg_system.log), pweb, netbuf, netbuf_used, bufferx, 0);
    }
 */
@@ -9098,7 +9115,8 @@ int netx_tcp_disconnect(MGWEB *pweb, int context)
 
    }
 
-   pcon->closed = 1;
+   /* pcon->closed = 1; v2.8.42 */
+   pcon->connected = 0; /* v2.8.42 */
 
    return 0;
 
@@ -9112,7 +9130,8 @@ int netx_tcp_write(MGWEB *pweb, unsigned char *data, int size)
 
    pcon = pweb->pcon;
 
-   if (pcon->closed == 1) {
+   /* if (pcon->closed == 1) { v2.8.42 */
+   if (pcon->connected == 0) { /* v2.8.42 */
       strcpy(pweb->error, "TCP Write Error: Socket is Closed");
       return -1;
    }
@@ -9212,7 +9231,7 @@ int netx_tcp_read(MGWEB *pweb, unsigned char *data, int size, int timeout, int c
 #endif
 
          if (n == 0) {
-            sprintf(pweb->error, "TCP Read Error: DB Server did not respond within the timeout period (%d seconds)", timeout);
+            sprintf(pweb->error, "TCP Read Error: DB Server %s (%s:%d) did not respond within the timeout period (%d seconds)", (char *) pcon->psrv->name, (char *) pcon->psrv->ip_address, pcon->psrv->port, timeout);
             result = NETX_READ_TIMEOUT;
             break;
          }
@@ -9223,7 +9242,7 @@ int netx_tcp_read(MGWEB *pweb, unsigned char *data, int size, int timeout, int c
 
             errorno = (int) netx_get_last_error(0);
             netx_get_error_message(errorno, message, 250, 0);
-            sprintf(pweb->error, "TCP Read Error (on select): DB Server closed the connection unexpectedly: Error Code: %d (%s)", errorno, message);
+            sprintf(pweb->error, "TCP Read Error (on select): DB Server %s (%s:%d) closed the connection unexpectedly: Error Code: %d (%s)", (char *) pcon->psrv->name, (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
 
             result = NETX_READ_ERROR;
             break;
@@ -9234,9 +9253,10 @@ int netx_tcp_read(MGWEB *pweb, unsigned char *data, int size, int timeout, int c
 
       if (n < 1) {
          if (n == 0) {
-            strcpy(pweb->error, "TCP Read Error (on recv): DB Server closed the connection unexpectedly");
+            sprintf(pweb->error, "TCP Read Error (on recv): DB Server %s (%s:%d) closed the connection unexpectedly", (char *) pcon->psrv->name, (char *) pcon->psrv->ip_address, pcon->psrv->port);
             result = NETX_READ_EOF;
-            pcon->closed = 1;
+            /* pcon->closed = 1; v2.8.42 */
+            pcon->connected = 0; /* v2.8.42 */
             pcon->eof = 1;
          }
          else {
@@ -9245,11 +9265,12 @@ int netx_tcp_read(MGWEB *pweb, unsigned char *data, int size, int timeout, int c
 
             errorno = (int) netx_get_last_error(0);
             netx_get_error_message(errorno, message, 250, 0);
-            sprintf(pweb->error, "TCP Read Error (on recv): DB Server closed the connection unexpectedly: Error Code: %d (%s)", errorno, message);
+            sprintf(pweb->error, "TCP Read Error (on recv): DB Server %s (%s:%d) closed the connection unexpectedly: Error Code: %d (%s)", (char *) pcon->psrv->name, (char *) pcon->psrv->ip_address, pcon->psrv->port, errorno, message);
 
             result = NETX_READ_ERROR;
             len = 0;
-            pcon->closed = 1;
+            /* pcon->closed = 1; v2.8.42 */
+            pcon->connected = 0; /* v2.8.42 */
          }
          break;
       }
@@ -9268,6 +9289,14 @@ int netx_tcp_read(MGWEB *pweb, unsigned char *data, int size, int timeout, int c
    if (len) {
       result = len;
    }
+
+/*
+   {
+      char bufferx[1024];
+      sprintf(bufferx, "netx_tcp_read size=%d; context=%d; result=%d;", size, context, result);
+      mg_log_buffer(pweb->plog, pweb, data, len > 0 ? len : 0, bufferx, 0);
+   }
+*/
    return result;
 }
 

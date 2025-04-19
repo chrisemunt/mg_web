@@ -1105,7 +1105,7 @@ typedef struct tagMGSRV {
    char              *output_device;
    char              *dbtype_name;
    MGBUF             *penv;
-   int               net_connection;
+   int               net_connection; /* flag set if configuration indicates network connection */
    char              *tls_name; /* v2.3.21 */
    MGTLS             *ptls;
    struct tagMGSRV   *pnext;
@@ -1166,8 +1166,8 @@ typedef struct tagDBXCON {
    DBXYDBSO          *p_ydb_so;
    DBXGTMSO          *p_gtm_so;
    short             increment;
-   int               net_connection;
-   int               closed;
+   int               connected; /* v2.8.42 flag set if TCP connection successful */
+   /* int            closed; v2.8.42 */
    int               timeout;
    int               current_timeout;
    int               eof;
