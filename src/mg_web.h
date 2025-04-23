@@ -281,6 +281,8 @@ typedef int    xc_status_t;
 #define DBX_MAXCONS              8192
 #define DBX_MAXARGS              64
 #define DBX_HEADER_SIZE          2048
+/* v2.8.43 amount of space reserved at end of response header buffer for added fields */
+#define DBX_HEADER_MARGIN        256
 
 #define DBX_ERROR_SIZE           512
 
@@ -1314,10 +1316,12 @@ typedef struct tagMGWEB {
    int            offs_content;
    char           *response_content;
    char           *response_headers;
+   char           *response_headers_long; /* v2.8.43 */
    char           *response_content_type; /* v2.7.33 */
    char           *response_cache_control;
    char           *response_connection;
    int            response_headers_len;
+   int            response_headers_alloc; /* v2.8.43 */
    unsigned long  requestno_in;
    unsigned long  requestno_out;
    char           *requestno;

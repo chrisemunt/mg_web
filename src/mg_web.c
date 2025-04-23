@@ -214,6 +214,11 @@ Version 2.8.41 9 March 2025:
 Version 2.8.42 19 April 2025:
    Protect against a memory violation that occasionally occurred after a failover event.
    - Exception caught in f:mg_web_execute: c0000005:30
+
+Version 2.8.43 23 April 2025:
+   Correct a fault in the buffer allocation for (particularly large) HTTP response headers.
+   - Exception caught in f:mg_web_process: c0000005:40
+
 */
 
 
@@ -824,6 +829,7 @@ mg_web_process_failover:
       }
 
       /* v2.7.33 */
+
 /*
       {
          char bufferx[1024];
@@ -831,12 +837,39 @@ mg_web_process_failover:
          mg_log_buffer(pweb->plog, pweb, (char *) pweb->response_headers, (int) pweb->response_headers_len, bufferx, 0);
       }
 */
+      /* v2.8.43 */
       DBX_TRACE(40)
-      p = (unsigned char *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4));
-      DBX_TRACE(401)
+      /* see if we can make a copy of the HTTP response header at the end of the request/response buffer for onward processing */
+      /* we originally reserved DBX_HEADER_SIZE but allow for an extra DBX_HEADER_MARGIN Bytes for any headers we need to add */
+      pweb->response_headers_alloc = (int) (pweb->output_val.svalue.len_alloc - (pweb->output_val.svalue.len_used + 4));
+      if (pweb->response_headers_alloc < (pweb->response_headers_len + DBX_HEADER_MARGIN)) {
+         DBX_TRACE(401)
+/*
+         {
+            char bufferx[1024];
+            sprintf(bufferx, "HTTP Response header: len_used=%d; alloc=%d; header_len=%d; space_available=%d; space_required=%d;", pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, pweb->response_headers_len, pweb->response_headers_alloc, (pweb->response_headers_len + DBX_HEADER_MARGIN));
+            mg_log_event(pweb->plog, pweb, (char *) bufferx, "mg_web: oversize header", 0);
+         }
+*/
+         pweb->response_headers_long = (char *) mg_malloc(pweb->pweb_server, pweb->response_headers_len + DBX_HEADER_MARGIN, 0);
+         if (pweb->response_headers_long) {
+            p = (unsigned char *)  pweb->response_headers_long;
+            pweb->response_headers_alloc = pweb->response_headers_len + DBX_HEADER_MARGIN;
+         }
+         else {
+            mg_log_event(pweb->plog, pweb, "Unable to obtain memory to process an oversize HTTP response header", "mg_web: response header error", 0);
+            p = (unsigned char *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4));
+            pweb->response_headers = (char *) MG_DEFAULT_HEADER;
+         }
+      }
+      else {
+         DBX_TRACE(402)
+         p = (unsigned char *) (pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4));
+      }
+      DBX_TRACE(403)
       strcpy((char *) p, pweb->response_headers);
       pweb->response_headers = (char *) p;
-      DBX_TRACE(402)
+      DBX_TRACE(404)
 
       mg_parse_headers(pweb);
 
@@ -850,8 +883,13 @@ mg_web_process_failover:
             sprintf(buffer, "\r\nSet-Cookie: %s=%d; path=/; httpOnly;", (char *) pweb->ppath->sa_cookie, pweb->server_no);
          }
          len = (int) strlen(buffer);
-         strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
-         pweb->response_headers_len += len;
+         if ((pweb->response_headers_len + len + 6) < pweb->response_headers_alloc) {
+            strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
+            pweb->response_headers_len += len;
+         }
+         else {
+            mg_log_event(pweb->plog, pweb, "Insufficient space to add server affinity cookie", "mg_web: response header error", 0);
+         }
       }
 
       if (pweb->sse) { /* v2.7.33 */
@@ -859,50 +897,66 @@ mg_web_process_failover:
          if (!pweb->response_content_type) {
             strcpy(buffer, "\r\nContent-Type: text/event-stream");
             len = (int) strlen(buffer);
-            strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
-            pweb->response_headers_len += len; 
+            if ((pweb->response_headers_len + len + 6) < pweb->response_headers_alloc) {
+               strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
+               pweb->response_headers_len += len;
+            }
+            else {
+               mg_log_event(pweb->plog, pweb, "Insufficient space to add Content-Type header", "mg_web: response header error", 0);
+            }
          }
-         if (pweb->wserver_chunks_response == 0)
-            strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
-         else
-            strcpy(buffer, "\r\n\r\n");
-         len = (int) strlen(buffer);
-         strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
-         pweb->response_headers_len += len;
+         if (pweb->wserver_chunks_response == 0) {
+            strcpy(buffer, "\r\nTransfer-Encoding: chunked");
+            len = (int) strlen(buffer);
+            if ((pweb->response_headers_len + len + 6) < pweb->response_headers_alloc) {
+               strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
+               pweb->response_headers_len += len;
+            }
+            else {
+               mg_log_event(pweb->plog, pweb, "Insufficient space to add Transfer-Encoding header", "mg_web: response header error", 0);
+            }
+         }
       }
       else {
          if (pweb->response_clen_server >= 0) { /* DB server supplied content length */
             pweb->wserver_chunks_response = 1; /* Effectively turn off chunking */
-            strcpy(pweb->response_headers + pweb->response_headers_len, "\r\n\r\n");
-            pweb->response_headers_len += 4;
          }
          else {
+            *buffer = '\0';
             if (pweb->response_streamed && pweb->response_chunked && pweb->response_remaining > 0) {
-               if (pweb->wserver_chunks_response == 0)
-                  strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
-               else
-                  strcpy(buffer, "\r\n\r\n");
+               if (pweb->wserver_chunks_response == 0) {
+                  strcpy(buffer, "\r\nTransfer-Encoding: chunked");
+               }
             }
             else if (pweb->response_streamed && pweb->response_maxclen && pweb->response_remaining > 0) { /* v2.8.38 */
-               strcpy(buffer, "\r\nConnection: close\r\n\r\n");
+               strcpy(buffer, "\r\nConnection: close");
                pweb->wserver_chunks_response = 1; /* Effectively turn off chunking */
-/*
-               if (pweb->wserver_chunks_response == 0)
-                  strcpy(buffer, "\r\nTransfer-Encoding: chunked\r\n\r\n");
-               else
-                  strcpy(buffer, "\r\n\r\n");
-*/
             }
             else {
                pweb->response_streamed = 0;
-               sprintf(buffer, "\r\nContent-Length: %d\r\n\r\n", pweb->response_clen);
+               sprintf(buffer, "\r\nContent-Length: %d", pweb->response_clen);
             }
             len = (int) strlen(buffer);
-            strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
-            pweb->response_headers_len += len;
-            /* mg_log_event(pweb->plog, pweb, pweb->response_headers, "Parsed Response Headers", 0); */
+            if (len) {
+               if ((pweb->response_headers_len + len + 6) < pweb->response_headers_alloc) {
+                  strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
+                  pweb->response_headers_len += len;
+               }
+               else {
+                  mg_log_event(pweb->plog, pweb, "Insufficient space to add Content-Length (or Encoding) header", "mg_web: response header error", 0);
+               }
+            }
          }
       }
+      /* mg_log_event(pweb->plog, pweb, pweb->response_headers, "Parsed Response Headers", 0); */
+
+      /* v2.8.43 we have already reserved 6 Bytes for the terminator */
+      strcpy(buffer, "\r\n\r\n");
+      len = (int) strlen(buffer);
+      strcpy(pweb->response_headers + pweb->response_headers_len, buffer);
+      pweb->response_headers_len += len;
+
+      /* mg_log_buffer(pweb->plog, pweb, pweb->response_headers, pweb->response_headers_len, "Parsed Response Headers", 0); */
    }
    else { /* v2.1.13 */
       DBX_TRACE(42)
@@ -3141,6 +3195,9 @@ __try {
    pweb->output_val.pnext = NULL;
    pweb->poutput_val_last = NULL;
    pweb->request_cookie = NULL;
+   pweb->response_headers = NULL;
+   pweb->response_headers_long = NULL; /* v2.8.43 */
+   pweb->response_headers_alloc = 0; /* v2.8.43 */
 
    pweb->wstype = wstype; /* v2.7.33 */
    pweb->evented = 0;
@@ -3265,6 +3322,10 @@ __try {
    }
    if (pweb->request_cookie) { /* v2.1.10 */
       mg_free(pweb->pweb_server, (void *) pweb->request_cookie, 2); /* v2.5.31 */
+   }
+   if (pweb->response_headers_long) { /* v2.8.43 */
+      mg_free(pweb->pweb_server, (void *) pweb->response_headers_long, 21);
+      /* mg_log_event(pweb->plog, pweb, "Release oversize header memory", "mg_web: oversize header", 0); */
    }
 
    mg_free(pweb->pweb_server, pweb, 3);
@@ -4158,7 +4219,6 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 #endif
 }
-
 
 
 int mg_parse_config()
