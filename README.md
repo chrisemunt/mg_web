@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-19 April 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+23 April 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 42.
+* Current Release: Version: 2.8; Revision 43.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -358,3 +358,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.8.42 (19 April 2025)
 * Protect against a memory violation that occasionally occurred after a failover event.
    * The symptom of this problem (for Windows hosts) is the following Event Log message: Exception caught in f:mg_web_execute: c0000005:30
+
+### v2.8.43 (23 April 2025):
+* Correct a fault in the buffer allocation for (particularly large) HTTP response headers.
+   * The symptom of this problem (for Windows hosts) is the following Event Log message: Exception caught in f:mg_web_process: c0000005:40
