@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-23 April 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+1 May 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 43.
+* Current Release: Version: 2.8; Revision 44.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -359,6 +359,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
 * Protect against a memory violation that occasionally occurred after a failover event.
    * The symptom of this problem (for Windows hosts) is the following Event Log message: Exception caught in f:mg_web_execute: c0000005:30
 
-### v2.8.43 (23 April 2025):
-* Correct a fault in the buffer allocation for (particularly large) HTTP response headers.
-   * The symptom of this problem (for Windows hosts) is the following Event Log message: Exception caught in f:mg_web_process: c0000005:40
+### v2.8.43 (23 April 2025)
+   * Correct a fault in the buffer allocation for (particularly large) HTTP response headers.
+      * The symptom of this problem (for Windows hosts) is the following Event Log message: Exception caught in f:mg_web_process: c0000005:40
+
+### v2.8.44 (1 May 2025)
+   * Check that there's enough memory available to service a web request before proceeding.
+      * If a web server host is low in memory, an HTTP 500 error will be immediately returned to the client and a "Memory Allocation" error written to the event log.
