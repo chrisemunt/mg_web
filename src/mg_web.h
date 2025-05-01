@@ -472,6 +472,35 @@ typedef int    xc_status_t;
 #define MG_WS_APACHE             2
 #define MG_WS_NGINX              3
 
+/* v2.8.44 unique IDs for allocated memory blocks */
+#define MG_MID_PWEB              1
+#define MG_MID_PWEBEXT           2
+#define MG_MID_COOKIE            3
+#define MG_MID_RESPHEADER        4
+
+#define MG_MID_SYSCON            101
+#define MG_MID_SRVCON            102
+#define MG_MID_PATHCON           103
+#define MG_MID_TLSCON            104
+#define MG_MID_ENVCON            105
+#define MG_MID_WSCON             106
+#define MG_MID_CONMSG            107
+
+#define MG_MID_ISC               201
+#define MG_MID_ISCSTR            202
+#define MG_MID_YDB               203
+#define MG_MID_GTM               204
+
+#define MG_MID_CONNECTION        301
+#define MG_MID_TLSCONNECTION     302
+#define MG_MID_LIBTLS            303
+#define MG_MID_LIBCRYPT          304
+#define MG_MID_WEBSOCKET         305
+
+#define MG_MID_BUF               801
+
+#define MG_MID_DEBUG             901
+
 #if defined(_WIN32)
 /*
 #if defined(MG_DBA_DSO)

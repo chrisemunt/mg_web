@@ -219,6 +219,11 @@ Version 2.8.43 23 April 2025:
    Correct a fault in the buffer allocation for (particularly large) HTTP response headers.
    - Exception caught in f:mg_web_process: c0000005:40
 
+Version 2.8.44 1 May 2025:
+   Check that there's enough memory available to service a web request before proceeding.
+   - If a web server host is low in memory, an HTTP 500 error will be immediately returned to the client and a "Memory Allocation" error written to the event log.
+   - A non-change: add unique IDs (MG_MID* labels) to all memory allocation and free calls.
+
 */
 
 
@@ -851,7 +856,7 @@ mg_web_process_failover:
             mg_log_event(pweb->plog, pweb, (char *) bufferx, "mg_web: oversize header", 0);
          }
 */
-         pweb->response_headers_long = (char *) mg_malloc(pweb->pweb_server, pweb->response_headers_len + DBX_HEADER_MARGIN, 0);
+         pweb->response_headers_long = (char *) mg_malloc(pweb->pweb_server, pweb->response_headers_len + DBX_HEADER_MARGIN, MG_MID_RESPHEADER);
          if (pweb->response_headers_long) {
             p = (unsigned char *)  pweb->response_headers_long;
             pweb->response_headers_alloc = pweb->response_headers_len + DBX_HEADER_MARGIN;
@@ -2470,7 +2475,7 @@ __try {
             pcon->no_requests = 0;
          }
          else {
-            pcon = (DBXCON *) mg_malloc(NULL, sizeof(DBXCON), 1);
+            pcon = (DBXCON *) mg_malloc(NULL, sizeof(DBXCON), MG_MID_CONNECTION);
             if (pcon) {
                memset((void *) pcon, 0, sizeof(DBXCON));
                if (!mg_connection) {
@@ -3177,7 +3182,7 @@ __try {
       len_alloc = DBX_LS_BUFFER_ISC;
    }
 
-   pweb = (MGWEB *) mg_malloc(pweb_server, sizeof(MGWEB) + (len_alloc + 32), 2); /* v2.5.31 */
+   pweb = (MGWEB *) mg_malloc(pweb_server, sizeof(MGWEB) + (len_alloc + 32), MG_MID_PWEB); /* v2.5.31 */
    if (!pweb) {
       return NULL;
    }
@@ -3257,7 +3262,7 @@ __try {
 
    len_alloc = 128000;
 
-   pval = (DBXVAL *) mg_malloc(pweb->pweb_server, sizeof(DBXVAL) + (len_alloc + 32), 3); /* v2.5.31 */
+   pval = (DBXVAL *) mg_malloc(pweb->pweb_server, sizeof(DBXVAL) + (len_alloc + 32), MG_MID_PWEBEXT); /* v2.5.31 */
    if (!pval) {
       return NULL;
    }
@@ -3317,18 +3322,18 @@ __try {
    pval = pweb->output_val.pnext;
    while (pval) {
       pvalnext = pval->pnext;
-      mg_free(pweb->pweb_server, (void *) pval, 1); /* v2.5.31 */
+      mg_free(pweb->pweb_server, (void *) pval, MG_MID_PWEBEXT); /* v2.5.31 */
       pval = pvalnext; 
    }
    if (pweb->request_cookie) { /* v2.1.10 */
-      mg_free(pweb->pweb_server, (void *) pweb->request_cookie, 2); /* v2.5.31 */
+      mg_free(pweb->pweb_server, (void *) pweb->request_cookie, MG_MID_COOKIE); /* v2.5.31 */
    }
    if (pweb->response_headers_long) { /* v2.8.43 */
-      mg_free(pweb->pweb_server, (void *) pweb->response_headers_long, 21);
+      mg_free(pweb->pweb_server, (void *) pweb->response_headers_long, MG_MID_RESPHEADER);
       /* mg_log_event(pweb->plog, pweb, "Release oversize header memory", "mg_web: oversize header", 0); */
    }
 
-   mg_free(pweb->pweb_server, pweb, 3);
+   mg_free(pweb->pweb_server, (void *) pweb, MG_MID_PWEB);
 
    return 0;
 
@@ -3766,7 +3771,7 @@ __try {
    *sname = '\0';
    found = 0;
    len = 4096;
-   pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, 4); /* v2.5.31 */
+   pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, MG_MID_COOKIE); /* v2.5.31 */
    DBX_TRACE(1)
    if (!pweb->request_cookie) {
       return server_no;
@@ -3778,9 +3783,9 @@ __try {
       DBX_TRACE(3)
       if (rc == MG_CGI_TOOLONG) {
          DBX_TRACE(4)
-         mg_free(NULL, (void *) pweb->request_cookie, 4);
+         mg_free(pweb->pweb_server, (void *) pweb->request_cookie, MG_MID_COOKIE);
          len = (n + 2) * 4096;
-         pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, 5);
+         pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, MG_MID_COOKIE);
          if (!pweb->request_cookie) {
             break;
          }
@@ -4001,7 +4006,7 @@ __try {
 */
    mg_init_critical_section((void *) &mg_global_mutex);
 
-   mg_system.config = (char *) mg_malloc(NULL, size + size_default + 32, 6);
+   mg_system.config = (char *) mg_malloc(NULL, size + size_default + 32, MG_MID_SYSCON);
    if (!mg_system.config) {
       mg_system.plog = &(mg_system.log);
       mg_system.log.req_no = 0;
@@ -4069,9 +4074,10 @@ __try {
       char buffer[256];
 
       size = 5000000;
-      p = (char *) mg_malloc(NULL, size, 999);
+      p = (char *) mg_malloc(NULL, size, MG_MID_DEBUG);
       sprintf(buffer, "Reserve large memory block; size=%d, p=%p", size, p);
       mg_log_event(&(mg_system.log), NULL, buffer, "mg_web: memory test", 0);
+      mg_free(NULL, (void *) p, MG_MID_DEBUG);
    }
 */
 
@@ -4133,7 +4139,7 @@ __try {
       memset((void *) &web, 0, sizeof(MGWEB));
       web.pcon = pcon;
       mg_release_connection(&web, 1);
-      mg_free(NULL, (void *) pcon, 5);
+      mg_free(NULL, (void *) pcon, MG_MID_CONNECTION);
       pcon = pcon_next;
    }
    mg_connection = NULL;
@@ -4164,7 +4170,7 @@ __try {
    ptls = mg_tls;
    while (ptls) {
       ptls_next = ptls->pnext;
-      mg_free(NULL, (void *) ptls, 6);
+      mg_free(NULL, (void *) ptls, MG_MID_TLSCON);
       ptls = ptls_next;
    }
    mg_tls = NULL;
@@ -4175,11 +4181,11 @@ __try {
       pwsmap = ppath->pwsmap;
       while (pwsmap) {
          pwsmap_next = pwsmap->pnext;
-         mg_free(NULL, (void *) pwsmap, 7);
+         mg_free(NULL, (void *) pwsmap, MG_MID_WSCON);
          pwsmap = pwsmap_next;
       }
       ppath->pwsmap = NULL;
-      mg_free(NULL, (void *) ppath, 8);
+      mg_free(NULL, (void *) ppath, MG_MID_PATHCON);
       ppath = ppath_next;
    }
    mg_path = NULL;
@@ -4187,13 +4193,13 @@ __try {
    psrv = mg_server;
    while (psrv) {
       psrv_next = psrv->pnext;
-      mg_free(NULL, (void *) psrv, 9);
+      mg_free(NULL, (void *) psrv, MG_MID_SRVCON);
       psrv = psrv_next;
    }
    mg_server = NULL;
 
    if (mg_system.config) {
-      mg_free(NULL, (void *) mg_system.config, 10);
+      mg_free(NULL, (void *) mg_system.config, MG_MID_SYSCON);
       mg_system.config = NULL;
    }
 
@@ -4337,7 +4343,7 @@ __try {
                      len --;
                      word[1][len] = '\0';
                   }
-                  psrv = (MGSRV *) mg_malloc(NULL, sizeof(MGSRV), 7);
+                  psrv = (MGSRV *) mg_malloc(NULL, sizeof(MGSRV), MG_MID_SRVCON);
                   if (!psrv) {
                      strcpy(mg_system.config_error, "Memory allocation error (MGSRV)");
                      break;
@@ -4383,7 +4389,7 @@ __try {
                      word[1][len ++] = '/';
                      word[1][len] = '\0';
                   }
-                  ppath = (MGPATH *) mg_malloc(NULL, sizeof(MGPATH), 8);
+                  ppath = (MGPATH *) mg_malloc(NULL, sizeof(MGPATH), MG_MID_PATHCON);
                   if (!ppath) {
                      strcpy(mg_system.config_error, "Memory allocation error (MGPATH)");
                      break;
@@ -4423,7 +4429,7 @@ __try {
                      len --;
                      word[1][len] = '\0';
                   }
-                  ptls = (MGTLS *) mg_malloc(NULL, sizeof(MGTLS), 9);
+                  ptls = (MGTLS *) mg_malloc(NULL, sizeof(MGTLS), MG_MID_TLSCON);
                   if (!ptls) {
                      strcpy(mg_system.config_error, "Memory allocation error (MGTLS)");
                      break;
@@ -4466,7 +4472,7 @@ __try {
             if (inserver) {
                if (inenv) {
                   if (!psrv->penv) {
-                     psrv->penv = (MGBUF *) mg_malloc(NULL, sizeof(MGBUF), 10);
+                     psrv->penv = (MGBUF *) mg_malloc(NULL, sizeof(MGBUF), MG_MID_ENVCON);
                      if (!psrv->penv) {
                         strcpy(mg_system.config_error, "Memory allocation error (MGBUF:ENV)");
                         break;
@@ -4546,7 +4552,7 @@ __try {
                   }
                   else if (!strcmp(word[0], "websocket")) { /* v2.6.32 */
                      if (wn > 2) {
-                        pwsmap = (MGWSMAP *) mg_malloc(NULL, sizeof(MGWSMAP), 11);
+                        pwsmap = (MGWSMAP *) mg_malloc(NULL, sizeof(MGWSMAP), MG_MID_WSCON);
                         if (pwsmap) {
                            pwsmap->name = word[1];
                            pwsmap->name_len = (int) strlen(pwsmap->name);
@@ -4876,7 +4882,7 @@ int mg_verify_config()
 __try {
 #endif
 
-   pbuf = (char *) mg_malloc(NULL, 8192, 12);
+   pbuf = (char *) mg_malloc(NULL, 8192, MG_MID_CONMSG);
    
    psrv = mg_server;
    if (!psrv) {
@@ -5086,7 +5092,7 @@ mg_verify_config_exit:
    }
 
    if (pbuf) {
-      mg_free(NULL, pbuf, 11);
+      mg_free(NULL, pbuf, MG_MID_CONMSG);
    }
 
    return 0;
@@ -5780,7 +5786,7 @@ int isc_open(MGWEB *pweb)
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_isc_so) {
-      pcon->p_isc_so = (DBXISCSO *) mg_malloc(NULL, sizeof(DBXISCSO), 13);
+      pcon->p_isc_so = (DBXISCSO *) mg_malloc(NULL, sizeof(DBXISCSO), MG_MID_ISC);
       if (!pcon->p_isc_so) {
          strcpy(pweb->error, "No Memory");
          pweb->error_code = 1009;
@@ -5998,7 +6004,7 @@ int isc_error_message(MGWEB *pweb, int error_code)
    size1 = size;
 
    if (pcon->p_isc_so && pcon->p_isc_so->p_CacheErrxlateA) {
-      pcerror = (CACHE_ASTR *) mg_malloc(NULL, sizeof(CACHE_ASTR), 14);
+      pcerror = (CACHE_ASTR *) mg_malloc(NULL, sizeof(CACHE_ASTR), MG_MID_ISCSTR);
       if (pcerror) {
          pcerror->str[0] = '\0';
          pcerror->len = 50;
@@ -6014,7 +6020,7 @@ int isc_error_message(MGWEB *pweb, int error_code)
             strncpy(pweb->error, (char *) pcerror->str, len);
             pweb->error[len] = '\0';
          }
-         mg_free(NULL, (void *) pcerror, 12);
+         mg_free(NULL, (void *) pcerror, MG_MID_ISCSTR);
          size1 -= (int) strlen(pweb->error);
       }
    }
@@ -6358,7 +6364,7 @@ int ydb_open(MGWEB *pweb)
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_ydb_so) {
-      pcon->p_ydb_so = (DBXYDBSO *) mg_malloc(NULL, sizeof(DBXYDBSO), 15);
+      pcon->p_ydb_so = (DBXYDBSO *) mg_malloc(NULL, sizeof(DBXYDBSO), MG_MID_YDB);
       if (!pcon->p_ydb_so) {
          strcpy(pweb->error, "No Memory");
          pweb->error_code = 1009; 
@@ -6674,7 +6680,7 @@ int gtm_open(MGWEB *pweb)
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_gtm_so) {
-      pcon->p_gtm_so = (DBXGTMSO *) mg_malloc(NULL, sizeof(DBXGTMSO), 16);
+      pcon->p_gtm_so = (DBXGTMSO *) mg_malloc(NULL, sizeof(DBXGTMSO), MG_MID_GTM);
       if (!pcon->p_gtm_so) {
          strcpy(pweb->error, "No Memory");
          pweb->error_code = 1009; 
@@ -6842,14 +6848,14 @@ int mg_buf_init(MGBUF *p_buf, int size, int increment_size)
 {
    int result;
 
-   p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char) * (size + 1), 17);
+   p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char) * (size + 1), MG_MID_BUF);
    if (p_buf->p_buffer) {
       *(p_buf->p_buffer) = '\0';
       result = 1;
    }
    else {
       result = 0;
-      p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char), 18);
+      p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char), MG_MID_BUF);
       if (p_buf->p_buffer) {
          *(p_buf->p_buffer) = '\0';
          size = 1;
@@ -6874,7 +6880,7 @@ int mg_buf_resize(MGBUF *p_buf, unsigned long size)
    if (size < p_buf->size)
       return 1;
 
-   p_buf->p_buffer = (unsigned char *) mg_realloc(NULL, (void *) p_buf->p_buffer, 0, sizeof(char) * size, 1);
+   p_buf->p_buffer = (unsigned char *) mg_realloc(NULL, (void *) p_buf->p_buffer, 0, sizeof(char) * size, MG_MID_BUF);
    p_buf->size = size;
 
    return 1;
@@ -6887,7 +6893,7 @@ int mg_buf_free(MGBUF *p_buf)
       return 0;
 
    if (p_buf->p_buffer)
-      mg_free(NULL, (void *) p_buf->p_buffer, 13);
+      mg_free(NULL, (void *) p_buf->p_buffer, MG_MID_BUF);
 
    p_buf->p_buffer = NULL;
    p_buf->size = 0;
@@ -6959,7 +6965,7 @@ int mg_buf_cat(MGBUF *p_buf, char *buffer, unsigned long size)
          if (p_temp) {
             memcpy((void *) p_buf->p_buffer, (void *) p_temp, tsize);
             p_buf->data_size = tsize;
-            mg_free(NULL, (void *) p_temp, 14);
+            mg_free(NULL, (void *) p_temp, MG_MID_BUF);
          }
       }
       else
@@ -7019,7 +7025,7 @@ void * mg_realloc(void *pweb_server, void *p, int curr_size, int new_size, short
    else {
       if (new_size >= curr_size) {
          if (p) {
-            mg_free(NULL, (void *) p, 15);
+            mg_free(NULL, (void *) p, id);
          }
 
 #if defined(_WIN32)
