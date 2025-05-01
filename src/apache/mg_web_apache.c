@@ -325,7 +325,10 @@ __try {
    }
 
    pweb = mg_obtain_request_memory((void *) pwebapache, (unsigned long) request_clen, request_chunked, MG_WS_APACHE); /* v2.7.33 */
-   if (!pweb) {
+   if (!pweb) { /* v2.8.44 */
+      char buffer[128];
+      sprintf(buffer, "Cannot obtain memory to serve request: Content-Length=%lu", request_clen);
+      mg_log_event(&(mg_system.log), NULL, buffer, "Memory allocation error (MGWEB *)", 0);
       return HTTP_INTERNAL_SERVER_ERROR;
    }
 
