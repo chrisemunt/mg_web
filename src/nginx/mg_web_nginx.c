@@ -445,7 +445,10 @@ static ngx_int_t ngx_http_mg_web_handler(ngx_http_request_t *r)
    request_chunked = (int) r->headers_in.chunked; /* v2.8.37 */
 
    pweb = mg_obtain_request_memory((void *) pwebnginx, (unsigned long) request_clen, request_chunked, MG_WS_NGINX); /* v2.7.33 */
-   if (pweb == NULL) {
+   if (pweb == NULL) { /* v2.8.44 */
+      char buffer[128];
+      sprintf(buffer, "Cannot obtain memory to serve request: Content-Length=%lu", request_clen);
+      mg_log_event(&(mg_system.log), NULL, buffer, "Memory allocation error (MGWEB *)", 0);
       return NGX_HTTP_INTERNAL_SERVER_ERROR;
    }
 
