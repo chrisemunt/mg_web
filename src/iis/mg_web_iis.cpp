@@ -147,6 +147,14 @@ public:
       }
 
       pweb = mg_obtain_request_memory((void *) pwebiis, request_clen, request_chunked, MG_WS_IIS); /* v2.7.33 */
+      if (!pweb) { /* v2.8.44 can't even allocate memory to serve request */
+         sprintf(buffer, "Cannot obtain memory to serve request: Content-Length=%d", request_clen);
+         mg_log_event(&(mg_system.log), NULL, buffer, "Memory allocation error (MGWEB *)", 0);
+         /* Set the HTTP status. */
+         pHttpResponse->SetStatus(500, "Server Error", 0, S_OK);
+         /* End additional processing. */
+         return RQ_NOTIFICATION_FINISH_REQUEST;
+      }
 
       pweb->pweb_server = (void *) pwebiis;
       pweb->evented = 0;
@@ -557,6 +565,7 @@ __try {
 
    result = 0;
    total = 0;
+   sent = 0;
 
    for (;;) {
       max = (buffer_size - total);
@@ -616,7 +625,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(buffer, 255, "Exception caught in f:mg_write_client: %x:%d", code, phase);
+      sprintf_s(buffer, 255, "Exception caught in f:mg_write_client: %x:%d (buffer_size=%d; total=%d; max=%d; sent=%d; result=%d)", code, phase, buffer_size, total, max, sent, result);
       mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
