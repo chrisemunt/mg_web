@@ -451,7 +451,7 @@ __try {
          sprintf(buffer, "%s   {\r\n      \"server\": \"%s\",\r\n", sn > 1 ? ",\r\n" : "", psrv->name);
          mg_status_add(pweb, padm, buffer, 0, 0);
  
-         sprintf(buffer, "      \"type\": \"%s\",\r\n", psrv->dbtype == DBX_DBTYPE_IRIS ? "InterSystems IRIS" : psrv->dbtype == DBX_DBTYPE_CACHE ? "InterSystems IRIS" : psrv->dbtype == DBX_DBTYPE_YOTTADB ? "YottaDB" : "None");
+         sprintf(buffer, "      \"type\": \"%s\",\r\n", psrv->dbtype == DBX_DBTYPE_IRIS ? "InterSystems IRIS" : psrv->dbtype == DBX_DBTYPE_CACHE ? "InterSystems Cache" : psrv->dbtype == DBX_DBTYPE_YOTTADB ? "YottaDB" : "None");
          mg_status_add(pweb, padm, buffer, 0, 0);
 
          if (psrv->net_connection) {
@@ -466,7 +466,7 @@ __try {
          sprintf(buffer, "Server: %s\r\n", psrv->name);
          mg_status_add(pweb, padm, buffer, 0, 0);
  
-         sprintf(buffer, "   Type: %s\r\n", psrv->dbtype == DBX_DBTYPE_IRIS ? "InterSystems IRIS" : psrv->dbtype == DBX_DBTYPE_CACHE ? "InterSystems IRIS" : psrv->dbtype == DBX_DBTYPE_YOTTADB ? "YottaDB" : "None");
+         sprintf(buffer, "   Type: %s\r\n", psrv->dbtype == DBX_DBTYPE_IRIS ? "InterSystems IRIS" : psrv->dbtype == DBX_DBTYPE_CACHE ? "InterSystems Cache" : psrv->dbtype == DBX_DBTYPE_YOTTADB ? "YottaDB" : "None");
          mg_status_add(pweb, padm, buffer, 0, 0);
 
          if (psrv->net_connection) {
@@ -509,7 +509,7 @@ __try {
       while (pcon) {
          if (pcon->psrv == psrv) {
             no_connections ++;
-            no_requests += psrv->no_requests;
+            no_requests += pcon->no_requests;
          }
          pcon = pcon->pnext;
       }
