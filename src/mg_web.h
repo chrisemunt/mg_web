@@ -316,6 +316,12 @@ typedef int    xc_status_t;
 
 #define DBX_IBUFFER_OFFSET       15
 
+/*
+#define DBX_BUFFER_BASELINE      128000
+*/
+#define DBX_BUFFER_BASELINE      8192
+#define DBX_BUFFER_BASELINE_SYS  1024
+#define DBX_BUFFER_EXTENSION     128000
 #define DBX_MAXSIZE              32767
 #define DBX_BUFFER               32768
 
@@ -451,6 +457,8 @@ typedef int    xc_status_t;
 #define NETX_TIMEOUT             30
 #define NETX_QUEUE_TIMEOUT       60
 #define NETX_IPV6                1
+/* v2.8.45 end of ISC sectioned write stream 0xff0xff0xff0xff */
+#define NETX_READ_ENDSTREAM      0
 #define NETX_READ_EOF            -9
 #define NETX_READ_NOCON          -1
 #define NETX_READ_ERROR          -2
@@ -472,11 +480,15 @@ typedef int    xc_status_t;
 #define MG_WS_APACHE             2
 #define MG_WS_NGINX              3
 
+/* v2.8.45 private heap size for Windows DLLs */
+#define MG_PRIVATE_HEAP_SIZE     1000000
+
 /* v2.8.44 unique IDs for allocated memory blocks */
 #define MG_MID_PWEB              1
 #define MG_MID_PWEBEXT           2
 #define MG_MID_COOKIE            3
 #define MG_MID_RESPHEADER        4
+#define MG_MID_PWEBINPUTEXT      5
 
 #define MG_MID_SYSCON            101
 #define MG_MID_SRVCON            102
@@ -1362,6 +1374,7 @@ typedef struct tagMGWEB {
    unsigned char  db_chunk_head[8];
    DBXLOG         *plog;
    DBXSTR         input_buf;
+   char           *input_buf_ext;
    DBXVAL         output_val;
    DBXVAL         *poutput_val_last;
    int            offset;

@@ -31,15 +31,19 @@
 
 /* Set this symbol to 1 to include TLS functionality */
 #define DBX_WITH_TLS             0
+#if defined(_WIN32)
+/* Set this symbol to 1 to allocate memory from a private heap */
+#define MG_PRIVATE_HEAP          1
+#endif
 
 #define MAJORVERSION             2
 #define MINORVERSION             8
-#define MAINTVERSION             44
+#define MAINTVERSION             45
 #define BUILDNUMBER              0
 
 #define DBX_VERSION_MAJOR        "2"
 #define DBX_VERSION_MINOR        "8"
-#define DBX_VERSION_BUILD        "44"
+#define DBX_VERSION_BUILD        "45"
 
 #define DBX_VERSION              DBX_VERSION_MAJOR "." DBX_VERSION_MINOR "." DBX_VERSION_BUILD
 #define DBX_COMPANYNAME          "MGateway Ltd\0"
