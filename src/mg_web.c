@@ -231,6 +231,12 @@ Version 2.8.45 12 May 2025:
    Use a private heap for Windows based web servers.
    Ensure that the client side of TCP sockets are closed when the DB Server closes its (server-side) end. 
 
+Version 2.8.46 16 May 2025:
+   Cope with scenario where mg_web don't have enough buffer space to accommodate a single DB Server chunk of response data.
+   - Previous versions would report the error: ""insufficient buffer space to hold DB Server response chunk" ...
+   This correction is loosely related to version 2.8.45 in that the problem only occurs when mg_web reserves low amounts of data for processing requests.
+
+
 */
 
 
@@ -9138,19 +9144,26 @@ __try {
    }
 
    for (;;) {
-      /* v2.8.45 make sure that our buffer is large enough to accomodate a ISC chunk */
+      /* v2.8.45 make sure that our buffer is large enough to accomodate a DB Server chunk */
       if (pweb->response_remaining >= (unsigned int) (pval->svalue.len_alloc - pval->svalue.len_used)) {
+         /* v2.8.46 cope with scenario where we don't have enough buffer space to accommodate a single DB Server chunk of response data */
+/*
          char buffer[256];
          sprintf(buffer, "insufficient buffer space to hold DB Server response chunk (bytes available=%d; required=%d)", (int) pval->svalue.len_alloc, (int) pweb->response_remaining);
          mg_log_event(pweb->plog, pweb, buffer, "mg_web: buffer size error - contact mg_web support", 0);
          rc = NETX_READ_ERROR;
          break;
+*/
+         get = (int) (pval->svalue.len_alloc - pval->svalue.len_used);
       }
-      rc = netx_tcp_read(pweb, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, pweb->response_remaining, pcon->timeout, 1);
+      else {
+         get = pweb->response_remaining;
+      }
+      rc = netx_tcp_read(pweb, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, get, pcon->timeout, 1);
 /*
       {
          char bufferx[256];
-         sprintf(bufferx, "Chunked response from DB Server: rc=%d; pweb->response_remaining=%d;", rc, pweb->response_remaining);
+         sprintf(bufferx, "Chunked response from DB Server: rc=%d; get=%d; pweb->response_remaining=%d;", rc, get, pweb->response_remaining);
          mg_log_event(pweb->plog, pweb, bufferx, "mg_web: Read response", 0);
       }
 */
@@ -9159,24 +9172,27 @@ __try {
          break;
       }
 
-      MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, (pval->svalue.buf_addr + pval->svalue.len_used), pweb->response_remaining);
+      MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, (pval->svalue.buf_addr + pval->svalue.len_used), get);
 
-      pval->svalue.len_used += pweb->response_remaining;
-      pweb->response_size += pweb->response_remaining;
+      pval->svalue.len_used += get;
+      pweb->response_size += get;
+      pweb->response_remaining -= get;
 
-      rc = netx_tcp_read(pweb, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
-      if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.45 */
-         break;
-      }
+      if (pweb->response_remaining == 0) { /* get next DB Server chunk */
+         rc = netx_tcp_read(pweb, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
+         if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.45 */
+            break;
+         }
 
-      if (pweb->db_chunk_head[0] == 0xff && pweb->db_chunk_head[1] == 0xff && pweb->db_chunk_head[2] == 0xff && pweb->db_chunk_head[3] == 0xff) {
-         pweb->response_remaining = 0;
+         if (pweb->db_chunk_head[0] == 0xff && pweb->db_chunk_head[1] == 0xff && pweb->db_chunk_head[2] == 0xff && pweb->db_chunk_head[3] == 0xff) {
+            pweb->response_remaining = 0;
+            MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
+            rc = CACHE_SUCCESS;
+            break;
+         }
+         pweb->response_remaining = mg_get_size((unsigned char *) pweb->db_chunk_head);
          MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
-         rc = CACHE_SUCCESS;
-         break;
       }
-      pweb->response_remaining = mg_get_size((unsigned char *) pweb->db_chunk_head);
-      MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
       /* if ((pval->svalue.len_used + pweb->response_size) > (unsigned int) (pval->svalue.len_alloc - DBX_HEADER_SIZE)) { */
       if ((pval->svalue.len_used + pweb->response_remaining) > (unsigned int) (pval->svalue.len_alloc - DBX_HEADER_SIZE)) { /* v2.1.14 */
 /*
