@@ -1352,6 +1352,7 @@ typedef struct tagMGWEB {
    int            response_chunked;
    int            response_maxclen; /* v2.8.38 */
    int            response_clen;
+   int            response_chunkno; /* v2.8.47 */
    unsigned int   response_size;
    unsigned int   response_remaining;
    int            offs_content;
@@ -1466,7 +1467,7 @@ int                     mg_server_online              (MGWEB *pweb, MGSRV *psrv,
 int                     mg_connect                    (MGWEB *pweb, int context);
 int                     mg_release_connection         (MGWEB *pweb, int close_connection);
 MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen, int request_chunked, int wstype);
-DBXVAL *                mg_extend_response_memory     (MGWEB *pweb);
+DBXVAL *                mg_extend_response_memory     (MGWEB *pweb, unsigned int min_size);
 int                     mg_release_request_memory     (MGWEB *pweb);
 int                     mg_find_sa_variable           (MGWEB *pweb);
 int                     mg_find_sa_variable_ex        (MGWEB *pweb, char *name, int name_len, unsigned char *nvpairs, int nvpairs_len);

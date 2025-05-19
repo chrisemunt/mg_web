@@ -236,6 +236,8 @@ Version 2.8.46 16 May 2025:
    - Previous versions would report the error: ""insufficient buffer space to hold DB Server response chunk" ...
    This correction is loosely related to version 2.8.45 in that the problem only occurs when mg_web reserves low amounts of data for processing requests.
 
+Version 2.8.47 19 May 2025:
+   Correct a minor fault in the framing of chunked response payloads (Transfer-Encoding: chunked).
 
 */
 
@@ -951,13 +953,13 @@ mg_web_process_failover:
       pweb->response_headers_alloc = (int) (pweb->output_val.svalue.len_alloc - (pweb->output_val.svalue.len_used + 4));
       if (pweb->response_headers_alloc < (pweb->response_headers_len + DBX_HEADER_MARGIN)) {
          DBX_TRACE(401)
-
+/*
          {
             char bufferx[1024];
             sprintf(bufferx, "HTTP Response header: len_used=%d; alloc=%d; header_len=%d; space_available=%d; space_required=%d;", pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, pweb->response_headers_len, pweb->response_headers_alloc, (pweb->response_headers_len + DBX_HEADER_MARGIN));
             mg_log_event(pweb->plog, pweb, (char *) bufferx, "mg_web: oversize header", 0);
          }
-
+*/
          pweb->response_headers_long = (char *) mg_malloc(pweb->pweb_server, pweb->response_headers_len + DBX_HEADER_MARGIN, MG_MID_RESPHEADER);
          if (pweb->response_headers_long) {
             p = (unsigned char *)  pweb->response_headers_long;
@@ -1127,7 +1129,7 @@ mg_web_process_failover:
 /*
    {
       char bufferx[1024];
-      sprintf(bufferx, "HTTP Response: rc=%d; len_used=%d; alloc=%d; content-length=%d; headers=%s;", rc, pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, pweb->response_clen, pweb->response_headers);
+      sprintf(bufferx, "HTTP Response: rc=%d; get=%d; len_used=%d; alloc=%d; content-length=%d; headers=%s;", rc, get, pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, pweb->response_clen, pweb->response_headers);
       mg_log_buffer(pweb->plog, pweb, (char *) pweb->response_content, (int) pweb->response_clen, bufferx, 0);
    }
 */
@@ -1225,16 +1227,19 @@ mg_web_process_failover:
       return CACHE_SUCCESS;
    }
 
-   if (get) {
+   if (get || pweb->output_val.pnext) { /* v2.8.47 include test for pweb->output_val.pnext for case where no content is in first (small) buffer */
       if (pweb->response_streamed) {
          if (pweb->wserver_chunks_response == 0) {
             get1 = get;
             pval = pweb->output_val.pnext;
-            while (pval) { /* 2.0.8 */
+            while (pval) { /* v2.0.8 */
                get1 += (int) pval->svalue.len_used;
                pval = pval->pnext;
             }
-            sprintf(buffer, "%x\r\n", get1);
+            /* v2.8.47 */
+            pweb->response_chunkno ++;
+            /* sprintf(buffer, "%x\r\n", get1); */
+            sprintf(buffer, "%s%lx\r\n", (pweb->response_chunkno == 1) ? "" : "\r\n", get1);
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
@@ -1250,8 +1255,10 @@ mg_web_process_failover:
          }
       }
       else {
-         MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
-         mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
+         if (get > 0) { /* v2.8.47 */
+            MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
+            mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
+         }
          pval = pweb->output_val.pnext;
          while (pval) { /* v2.0.8 */
             MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pval->svalue.buf_addr, pval->svalue.len_used); /* v2.1.14 */
@@ -1280,7 +1287,10 @@ mg_web_process_failover:
          get = pweb->output_val.svalue.len_used;
          pweb->response_content = pweb->output_val.svalue.buf_addr;
          if (pweb->wserver_chunks_response == 0) {
-            sprintf(buffer, "\r\n%x\r\n", get);
+            /* v2.8.47 */
+            pweb->response_chunkno ++;
+            /* sprintf(buffer, "\r\n%x\r\n", get); */
+            sprintf(buffer, "%s%lx\r\n", (pweb->response_chunkno == 1) ? "" : "\r\n", get);
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
@@ -3332,6 +3342,7 @@ __try {
    pweb->response_headers = NULL;
    pweb->response_headers_long = NULL; /* v2.8.43 */
    pweb->response_headers_alloc = 0; /* v2.8.43 */
+   pweb->response_chunkno = 0; /* v2.8.47 */
 
    pweb->wstype = wstype; /* v2.7.33 */
    pweb->evented = 0;
@@ -3379,7 +3390,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
-DBXVAL * mg_extend_response_memory(MGWEB *pweb)
+DBXVAL * mg_extend_response_memory(MGWEB *pweb, unsigned int min_size)
 {
    DBX_TRACE_INIT(0)
    unsigned int len_alloc;
@@ -3390,6 +3401,9 @@ __try {
 #endif
 
    len_alloc = DBX_BUFFER_EXTENSION;
+   if (len_alloc < min_size) { /* v2.8.47 */
+      len_alloc = min_size;
+   }
 
    pval = (DBXVAL *) mg_malloc(pweb->pweb_server, sizeof(DBXVAL) + (len_alloc + 32), MG_MID_PWEBEXT); /* v2.5.31 */
    if (!pval) {
@@ -4086,7 +4100,7 @@ __try {
          strcat(mg_system.log.log_file, "mgweb.log");
       }
    }
-
+/*
    {
       HEAP_SUMMARY heap;
       LPHEAP_SUMMARY pheap;
@@ -4114,6 +4128,7 @@ __try {
          mg_log_event(&(mg_system.log), NULL, buffer, "mg_web: Windows private heap summary", 0);
       }
    }
+*/
 #endif
 
    /* v2.7.35 */
@@ -9112,7 +9127,7 @@ __try {
                }
                else {
                   /* 2.0.8 */
-                  pval = mg_extend_response_memory(pweb);
+                  pval = mg_extend_response_memory(pweb, DBX_BUFFER_EXTENSION);
                   if (!pval) {
                      rc = NETX_READ_ERROR;
                      break;
@@ -9144,7 +9159,7 @@ __try {
    }
 
    for (;;) {
-      /* v2.8.45 make sure that our buffer is large enough to accomodate a DB Server chunk */
+      /* v2.8.45 make sure that our buffer is large enough to accommodate a DB Server chunk */
       if (pweb->response_remaining >= (unsigned int) (pval->svalue.len_alloc - pval->svalue.len_used)) {
          /* v2.8.46 cope with scenario where we don't have enough buffer space to accommodate a single DB Server chunk of response data */
 /*
@@ -9217,7 +9232,7 @@ __try {
             }
             else {
                /* 2.0.8 */
-               pval = mg_extend_response_memory(pweb);
+               pval = mg_extend_response_memory(pweb, pweb->response_remaining + 32); /* v2.8.47 */
                if (!pval) {
                   rc = NETX_READ_ERROR;
                   break;
