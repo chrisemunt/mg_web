@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-16 May 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+19 May 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 46.
+* Current Release: Version: 2.8; Revision 47.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -375,3 +375,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
    * Cope with the scenario where **mg\_web** don't have enough buffer space to accommodate a single DB Server chunk of response data.
       * Under these circumstances, previous versions would report the error: "insufficient buffer space to hold DB Server response chunk" ...
    * This correction is loosely related to version 2.8.45 in that the problem only occurs when **mg\_web** is configured to reserve relatively small amounts of data for processing requests.
+
+### v2.8.47 (19 May 2025)
+   * Correct a minor fault in the framing of chunked response payloads (Transfer-Encoding: chunked).
