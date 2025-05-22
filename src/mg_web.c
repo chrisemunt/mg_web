@@ -1239,7 +1239,7 @@ mg_web_process_failover:
             /* v2.8.47 */
             pweb->response_chunkno ++;
             /* sprintf(buffer, "%x\r\n", get1); */
-            sprintf(buffer, "%s%lx\r\n", (pweb->response_chunkno == 1) ? "" : "\r\n", get1);
+            sprintf(buffer, "%s%x\r\n", (pweb->response_chunkno == 1) ? "" : "\r\n", get1);
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
@@ -1290,7 +1290,7 @@ mg_web_process_failover:
             /* v2.8.47 */
             pweb->response_chunkno ++;
             /* sprintf(buffer, "\r\n%x\r\n", get); */
-            sprintf(buffer, "%s%lx\r\n", (pweb->response_chunkno == 1) ? "" : "\r\n", get);
+            sprintf(buffer, "%s%x\r\n", (pweb->response_chunkno == 1) ? "" : "\r\n", get);
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
