@@ -232,12 +232,15 @@ Version 2.8.45 12 May 2025:
    Ensure that the client side of TCP sockets are closed when the DB Server closes its (server-side) end. 
 
 Version 2.8.46 16 May 2025:
-   Cope with scenario where mg_web don't have enough buffer space to accommodate a single DB Server chunk of response data.
+   Cope with scenario where mg_web doesn't have enough buffer space to accommodate a single DB Server chunk of response data.
    - Previous versions would report the error: ""insufficient buffer space to hold DB Server response chunk" ...
    This correction is loosely related to version 2.8.45 in that the problem only occurs when mg_web reserves low amounts of data for processing requests.
 
 Version 2.8.47 19 May 2025:
    Correct a minor fault in the framing of chunked response payloads (Transfer-Encoding: chunked).
+
+Version 2.8.48 15 June 2025:
+   Correct a fault in sizing of the response payload (related to 2.8.45).
 
 */
 
@@ -1248,6 +1251,7 @@ mg_web_process_failover:
          }
          MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
          mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
+
          pval = pweb->output_val.pnext;
          while (pval) { /* v2.0.8 */
             mg_client_write(pweb, (unsigned char *) pval->svalue.buf_addr, (int) pval->svalue.len_used);
@@ -8922,13 +8926,19 @@ netx_tcp_command_reconnect:
    pweb->output_val.svalue.len_used = 0;
 
    rc = netx_tcp_read(pweb, (unsigned char *) pweb->output_val.svalue.buf_addr, offset, pcon->timeout, 1);
+
 /*
    {
       char bufferx[256];
       sprintf(bufferx, "netx_tcp_command RECV rc=%d; pcon->connected=%d;", rc, pcon->connected);
+#if 1
+      mg_log_event(&(mg_system.log), pweb, bufferx, "netx_tcp_command", 0);
+#else
       mg_log_buffer(&(mg_system.log), pweb, netbuf, netbuf_used, bufferx, 0);
+#endif
    }
 */
+
    if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
       return rc;
    }
@@ -8969,18 +8979,26 @@ netx_tcp_command_reconnect:
 /*
    {
       char buffer[256];
-      sprintf(buffer, "rc=%d; sort=%d; type=%d; response_size=%d; buffer_size=%d; get=%d;", rc, pweb->output_val.sort, pweb->output_val.type, pweb->response_size, pweb->output_val.svalue.len_alloc, (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE));
+      sprintf(buffer, "rc=%d; sort=%d; type=%d; response_size=%d; buffer_size=%d; get=%d; response_streamed=%d;", rc, pweb->output_val.sort, pweb->output_val.type, pweb->response_size, pweb->output_val.svalue.len_alloc, (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE), pweb->response_streamed);
       mg_log_event(pweb->plog, pweb, buffer, "netx_tcp_read", 0);
    }
 */
+
    get = 0;
    if (pweb->response_size > 0) {
       get = pweb->response_size - 5; /* first 5 Bytes already read */
       if (pweb->response_size > (unsigned int) (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE)) {
          get = (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE);
-         pweb->response_remaining = (pweb->response_size - get);
+         pweb->response_remaining = (pweb->response_size - (get + 5)); /* v2.8.48 don't forget to factor-in 5 Bytes of header */
       }
       netx_tcp_read(pweb, (unsigned char *) pweb->output_val.svalue.buf_addr + offset, get, pcon->timeout, 1);
+/*
+      {
+         char buffer[256];
+         sprintf(buffer, "rc=%d; just read=%d; pweb->response_size=%d; pweb->response_remaining=%d;", rc, get, pweb->response_size, pweb->response_remaining);
+         mg_log_event(pweb->plog, pweb, buffer, "netx_tcp_read", 0);
+      }
+*/
    }
 
    if (pweb->output_val.type == DBX_DTYPE_OREF) {
@@ -9582,9 +9600,14 @@ int netx_tcp_read(MGWEB *pweb, unsigned char *data, int size, int timeout, int c
    {
       char bufferx[1024];
       sprintf(bufferx, "netx_tcp_read size=%d; context=%d; result=%d;", size, context, result);
-      mg_log_buffer(pweb->plog, pweb, data, len > 0 ? len : 0, bufferx, 0);
+#if 1
+      mg_log_event(pweb->plog, pweb, bufferx, "debug: netx_tcp_read", 0);
+#else
+      mg_log_buffer(pweb->plog, pweb, (char *) data, len > 0 ? len : 0, bufferx, 0);
+#endif
    }
 */
+
    return result;
 }
 
