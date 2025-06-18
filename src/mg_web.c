@@ -219,28 +219,11 @@ Version 2.8.43 23 April 2025:
    Correct a fault in the buffer allocation for (particularly large) HTTP response headers.
    - Exception caught in f:mg_web_process: c0000005:40
 
-Version 2.8.44 1 May 2025:
+Version 2.8.49 18 June 2025:
    Check that there's enough memory available to service a web request before proceeding.
    - If a web server host is low in memory, an HTTP 500 error will be immediately returned to the client and a "Memory Allocation" error written to the event log.
-   - A non-change: add unique IDs (MG_MID* labels) to all memory allocation and free calls.
-
-Version 2.8.45 12 May 2025:
-   Review the default amount of memory reserved for processing requests.
-   - 10K will be reserved by default. This is the minimum, more can be reserved by specifying a value in the 'request_buffer_size' parameter.
-   - Example: request_buffer_size 100KB
-   Use a private heap for Windows based web servers.
+   Use a private heap for Windows based web servers to limit the scope for contention between mg_web and other web server addon modules.
    Ensure that the client side of TCP sockets are closed when the DB Server closes its (server-side) end. 
-
-Version 2.8.46 16 May 2025:
-   Cope with scenario where mg_web doesn't have enough buffer space to accommodate a single DB Server chunk of response data.
-   - Previous versions would report the error: ""insufficient buffer space to hold DB Server response chunk" ...
-   This correction is loosely related to version 2.8.45 in that the problem only occurs when mg_web reserves low amounts of data for processing requests.
-
-Version 2.8.47 19 May 2025:
-   Correct a minor fault in the framing of chunked response payloads (Transfer-Encoding: chunked).
-
-Version 2.8.48 15 June 2025:
-   Correct a fault in sizing of the response payload (related to 2.8.45).
 
 */
 
@@ -272,11 +255,10 @@ static DBXISCSO *    mg_isc_so_global  = NULL;
 static DBXYDBSO *    mg_ydb_so_global  = NULL;
 static DBXGTMSO *    mg_gtm_so_global  = NULL;
 
-/* v2.8.45 */
+/* v2.8.49 */
 #if defined(_WIN32) && defined(MG_PRIVATE_HEAP)
 static HANDLE        mg_private_heap   = NULL;
 #endif
-
 
 #if defined(_WIN32)
 CRITICAL_SECTION     mg_global_mutex;
@@ -288,8 +270,7 @@ pthread_mutex_t      mg_global_mutex   = PTHREAD_MUTEX_INITIALIZER;
 int mg_web(MGWEB *pweb)
 {
    DBX_TRACE_INIT(0)
-   int rc, len, mem_reset;
-   unsigned int len_alloc;
+   int rc, len;
    unsigned char *p;
    char buffer[256];
 
@@ -317,18 +298,6 @@ __try {
       return CACHE_FAILURE;
    }
 
-   mem_reset = 0;
-
-mg_web_reset:
-
-   /* v2.8.45 */
-/*
-   {
-      char buffer[256];
-      sprintf(buffer, "pweb->input_buf.len_alloc=%d; pweb->input_buf.len_used=%d;", pweb->input_buf.len_alloc, pweb->input_buf.len_used);
-      mg_log_event(pweb->plog, pweb, buffer, "mg_web: request buffer before we add any request content", 0);
-   }
-*/
    DBX_TRACE(1)
    strcpy(buffer, DBX_WEB_ROUTINE);
    len = (int) strlen((char *) buffer);
@@ -348,52 +317,6 @@ mg_web_reset:
 
    DBX_TRACE(2)
    rc = mg_get_all_cgi_variables(pweb);
-
-   /* v2.8.45 test request buffer resize code */
-/*
-   if (mem_reset == 0) {
-      rc = MG_CGI_TOOLONG;
-   }
-*/
-
-   if (rc == MG_CGI_TOOLONG || ((pweb->input_buf.len_used + pweb->request_clen + DBX_BUFFER_BASELINE_SYS) >= pweb->input_buf.len_alloc)) { /* v2.8.45 */
-
-      if (pweb->input_buf_ext) {
-         mg_free(pweb->pweb_server, (void *) pweb->input_buf_ext, MG_MID_PWEBINPUTEXT);
-         pweb->input_buf_ext = NULL;
-      }
-      len_alloc = (pweb->input_buf.len_alloc + DBX_BUFFER_BASELINE);
-      if (mem_reset < 3) {
-         pweb->input_buf_ext = (char *) mg_malloc(pweb->pweb_server, (len_alloc + 32), MG_MID_PWEBINPUTEXT);
-      }
-      if (!pweb->input_buf_ext) {
-         pweb->input_buf.len_used = DBX_IBUFFER_OFFSET;
-         pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
-         mg_web_http_error(pweb, 500, MG_CUSTOMPAGE_DBSERVER_UNAVAILABLE);
-         MG_LOG_RESPONSE_HEADER(pweb);
-         mg_submit_headers(pweb);
-         if (pweb->response_clen && pweb->response_content) {
-            MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, pweb->response_clen);
-            mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) pweb->response_clen);
-         }
-         return CACHE_FAILURE;
-      }
-
-      sprintf(buffer, "Request buffer resized from %d to %d bytes", pweb->input_buf.len_alloc, len_alloc);
-      mg_log_event(pweb->plog, pweb, buffer, "mg_web: buffer resize", 0);
-
-      pweb->input_buf.buf_addr = pweb->input_buf_ext;
-      pweb->input_buf.buf_addr += DBX_IBUFFER_OFFSET;
-      pweb->input_buf.len_alloc = len_alloc;
-      pweb->input_buf.len_used = 0;
-
-      pweb->output_val.svalue.buf_addr = pweb->input_buf.buf_addr;
-      pweb->output_val.svalue.len_alloc = pweb->input_buf.len_alloc;
-      pweb->output_val.svalue.len_used = pweb->input_buf.len_used;
-      mem_reset ++;
-      goto mg_web_reset;
-   }
-
    DBX_TRACE(3)
    rc = mg_get_path_configuration(pweb);
 
@@ -477,14 +400,6 @@ mg_web_reset:
    pweb->input_buf.len_used += (len + 5);
 */
 
-   /* v2.8.45 */
-/*
-   {
-      char buffer[256];
-      sprintf(buffer, "pweb->input_buf.len_alloc=%d; pweb->input_buf.len_used=%d;", pweb->input_buf.len_alloc, pweb->input_buf.len_used);
-      mg_log_event(pweb->plog, pweb, buffer, "mg_web: request buffer status after adding CGI environment variables", 0);
-   }
-*/
    DBX_TRACE(6)
    strcpy(buffer, "server=01234567890123456789012345678901");
    len = 39;
@@ -556,14 +471,6 @@ mg_web_reset:
    DBX_TRACE(7)
    rc = mg_websocket_check(pweb);
 
-   /* v2.8.45 */
-/*
-   {
-      char buffer[256];
-      sprintf(buffer, "pweb->input_buf.len_alloc=%d; pweb->input_buf.len_used=%d;", pweb->input_buf.len_alloc, pweb->input_buf.len_used);
-      mg_log_event(pweb->plog, pweb, buffer, "mg_web: request buffer status after adding system variables", 0);
-   }
-*/
    if (pweb->evented) {
       return rc;
    }
@@ -598,14 +505,6 @@ mg_web_reset:
    }
 #endif
 
-   /* v2.8.45 */
-/*
-   {
-      char buffer[256];
-      sprintf(buffer, "pweb->input_buf.len_alloc=%d; pweb->input_buf.len_used=%d;", pweb->input_buf.len_alloc, pweb->input_buf.len_used);
-      mg_log_event(pweb->plog, pweb, buffer, "mg_web: request buffer status before adding request payload", 0);
-   }
-*/
    DBX_TRACE(8)
    pweb->request_long = 0;
    if (pweb->request_clen) {
@@ -963,7 +862,7 @@ mg_web_process_failover:
             mg_log_event(pweb->plog, pweb, (char *) bufferx, "mg_web: oversize header", 0);
          }
 */
-         pweb->response_headers_long = (char *) mg_malloc(pweb->pweb_server, pweb->response_headers_len + DBX_HEADER_MARGIN, MG_MID_RESPHEADER);
+         pweb->response_headers_long = (char *) mg_malloc(pweb->pweb_server, pweb->response_headers_len + DBX_HEADER_MARGIN, 0);
          if (pweb->response_headers_long) {
             p = (unsigned char *)  pweb->response_headers_long;
             pweb->response_headers_alloc = pweb->response_headers_len + DBX_HEADER_MARGIN;
@@ -1132,7 +1031,7 @@ mg_web_process_failover:
 /*
    {
       char bufferx[1024];
-      sprintf(bufferx, "HTTP Response: rc=%d; get=%d; len_used=%d; alloc=%d; content-length=%d; headers=%s;", rc, get, pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, pweb->response_clen, pweb->response_headers);
+      sprintf(bufferx, "HTTP Response: rc=%d; len_used=%d; alloc=%d; content-length=%d; headers=%s;", rc, pweb->output_val.svalue.len_used, pweb->output_val.svalue.len_alloc, pweb->response_clen, pweb->response_headers);
       mg_log_buffer(pweb->plog, pweb, (char *) pweb->response_content, (int) pweb->response_clen, bufferx, 0);
    }
 */
@@ -1230,19 +1129,16 @@ mg_web_process_failover:
       return CACHE_SUCCESS;
    }
 
-   if (get || pweb->output_val.pnext) { /* v2.8.47 include test for pweb->output_val.pnext for case where no content is in first (small) buffer */
+   if (get) {
       if (pweb->response_streamed) {
          if (pweb->wserver_chunks_response == 0) {
             get1 = get;
             pval = pweb->output_val.pnext;
-            while (pval) { /* v2.0.8 */
+            while (pval) { /* 2.0.8 */
                get1 += (int) pval->svalue.len_used;
                pval = pval->pnext;
             }
-            /* v2.8.47 */
-            pweb->response_chunkno ++;
-            /* sprintf(buffer, "%x\r\n", get1); */
-            sprintf(buffer, "%s%x\r\n", (pweb->response_chunkno == 1) ? "" : "\r\n", get1);
+            sprintf(buffer, "%x\r\n", get1);
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
@@ -1251,7 +1147,6 @@ mg_web_process_failover:
          }
          MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
          mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
-
          pval = pweb->output_val.pnext;
          while (pval) { /* v2.0.8 */
             mg_client_write(pweb, (unsigned char *) pval->svalue.buf_addr, (int) pval->svalue.len_used);
@@ -1259,10 +1154,8 @@ mg_web_process_failover:
          }
       }
       else {
-         if (get > 0) { /* v2.8.47 */
-            MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
-            mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
-         }
+         MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pweb->response_content, get);
+         mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) get);
          pval = pweb->output_val.pnext;
          while (pval) { /* v2.0.8 */
             MG_LOG_RESPONSE_BUFFER_TO_WEBSERVER(pweb, pval->svalue.buf_addr, pval->svalue.len_used); /* v2.1.14 */
@@ -1284,17 +1177,14 @@ mg_web_process_failover:
       if (pweb->response_streamed) {
          pweb->output_val.svalue.len_used = 0;
          rc = netx_tcp_read_stream(pweb);
-         if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.45 */
+         if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.49 */
             close_connection = 1;
             break;
          }
          get = pweb->output_val.svalue.len_used;
          pweb->response_content = pweb->output_val.svalue.buf_addr;
          if (pweb->wserver_chunks_response == 0) {
-            /* v2.8.47 */
-            pweb->response_chunkno ++;
-            /* sprintf(buffer, "\r\n%x\r\n", get); */
-            sprintf(buffer, "%s%x\r\n", (pweb->response_chunkno == 1) ? "" : "\r\n", get);
+            sprintf(buffer, "\r\n%x\r\n", get);
             len = (int) strlen(buffer);
             pweb->response_content -= len;
             get += len;
@@ -1321,7 +1211,7 @@ mg_web_process_failover:
                get = pweb->output_val.svalue.len_alloc;
             }
             rc = netx_tcp_read(pweb, (unsigned char *) pweb->output_val.svalue.buf_addr, get, pweb->pcon->timeout, 1);
-            if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.45 */
+            if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.49 */
                close_connection = 1;
                break;
             }
@@ -2296,28 +2186,18 @@ __try {
       }
    }
 
-   result = MG_CGI_SUCCESS;
+   result = 0;
    for (n = 0; n < mg_system.cgi_max; n ++) {
       p = (pweb->input_buf.buf_addr + pweb->input_buf.len_used + 5);
 
-      /* v2.8.45 */
-      len = (int) strlen(mg_system.cgi[n]) + 1;
-      if ((pweb->input_buf.len_used + len + 5) >= pweb->input_buf.len_alloc) {
-         result = MG_CGI_TOOLONG;
-         break;
-      }
-
       strcpy(p, mg_system.cgi[n]);
       strcat(p, "=");
+      len = (int) strlen(p);
       p += len;
 
       lenv = (pweb->input_buf.len_alloc - (pweb->input_buf.len_used + len + 5));
       rc = mg_get_cgi_variable(pweb, mg_system.cgi[n], p, &lenv);
 
-      if (rc == MG_CGI_TOOLONG) { /* v2.8.45 */
-         result = rc;
-         break;
-      }
       if (rc == MG_CGI_SUCCESS) {
          len += lenv;
          mg_add_block_size((unsigned char *) pweb->input_buf.buf_addr + pweb->input_buf.len_used, (unsigned long) 0, (unsigned long) len, DBX_DSORT_WEBCGI, DBX_DTYPE_STR);
@@ -2609,7 +2489,7 @@ __try {
             pcon->no_requests = 0;
          }
          else {
-            pcon = (DBXCON *) mg_malloc(NULL, sizeof(DBXCON), MG_MID_CONNECTION);
+            pcon = (DBXCON *) mg_malloc(NULL, sizeof(DBXCON), 1);
             if (pcon) {
                memset((void *) pcon, 0, sizeof(DBXCON));
                if (!mg_connection) {
@@ -3307,15 +3187,7 @@ __try {
    }
 */
 
-   /* v2.8.45 */
-   /* len_alloc = 128000 + request_clen; */
-   /*
-      DBX_BUFFER_BASELINE is at least the size of the ISC response chunk size (sectioned writes),
-      DBX_HEADER_SIZE is a reasonable size for a response header,
-      and DBX_HEADER_MARGIN is a reasonable size for any added additional response headers we need to add
-   */
-   len_alloc = DBX_BUFFER_BASELINE + DBX_HEADER_SIZE + DBX_HEADER_MARGIN + request_clen;
-
+   len_alloc = 128000 + request_clen;
    if (len_alloc < mg_system.request_buffer_size) { /* v2.1.10 */
       len_alloc = mg_system.request_buffer_size;
    }
@@ -3324,14 +3196,13 @@ __try {
       len_alloc = DBX_LS_BUFFER_ISC;
    }
 
-   pweb = (MGWEB *) mg_malloc(pweb_server, sizeof(MGWEB) + (len_alloc + 32), MG_MID_PWEB); /* v2.5.31 */
+   pweb = (MGWEB *) mg_malloc(pweb_server, sizeof(MGWEB) + (len_alloc + 32), 2); /* v2.5.31 */
    if (!pweb) {
       return NULL;
    }
 
    memset((void *) pweb, 0, sizeof(MGWEB) + DBX_IBUFFER_OFFSET); /* v2.3.22 */
 
-   pweb->input_buf_ext = NULL; /* v2.8.45 */
    pweb->input_buf.buf_addr = ((char *) pweb) + sizeof(MGWEB);
    pweb->input_buf.buf_addr += DBX_IBUFFER_OFFSET;
    pweb->input_buf.len_alloc = len_alloc;
@@ -3346,7 +3217,6 @@ __try {
    pweb->response_headers = NULL;
    pweb->response_headers_long = NULL; /* v2.8.43 */
    pweb->response_headers_alloc = 0; /* v2.8.43 */
-   pweb->response_chunkno = 0; /* v2.8.47 */
 
    pweb->wstype = wstype; /* v2.7.33 */
    pweb->evented = 0;
@@ -3394,7 +3264,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
-DBXVAL * mg_extend_response_memory(MGWEB *pweb, unsigned int min_size)
+DBXVAL * mg_extend_response_memory(MGWEB *pweb)
 {
    DBX_TRACE_INIT(0)
    unsigned int len_alloc;
@@ -3404,12 +3274,9 @@ DBXVAL * mg_extend_response_memory(MGWEB *pweb, unsigned int min_size)
 __try {
 #endif
 
-   len_alloc = DBX_BUFFER_EXTENSION;
-   if (len_alloc < min_size) { /* v2.8.47 */
-      len_alloc = min_size;
-   }
+   len_alloc = 128000;
 
-   pval = (DBXVAL *) mg_malloc(pweb->pweb_server, sizeof(DBXVAL) + (len_alloc + 32), MG_MID_PWEBEXT); /* v2.5.31 */
+   pval = (DBXVAL *) mg_malloc(pweb->pweb_server, sizeof(DBXVAL) + (len_alloc + 32), 3); /* v2.5.31 */
    if (!pval) {
       return NULL;
    }
@@ -3469,21 +3336,18 @@ __try {
    pval = pweb->output_val.pnext;
    while (pval) {
       pvalnext = pval->pnext;
-      mg_free(pweb->pweb_server, (void *) pval, MG_MID_PWEBEXT); /* v2.5.31 */
+      mg_free(pweb->pweb_server, (void *) pval, 1); /* v2.5.31 */
       pval = pvalnext; 
    }
    if (pweb->request_cookie) { /* v2.1.10 */
-      mg_free(pweb->pweb_server, (void *) pweb->request_cookie, MG_MID_COOKIE); /* v2.5.31 */
+      mg_free(pweb->pweb_server, (void *) pweb->request_cookie, 2); /* v2.5.31 */
    }
    if (pweb->response_headers_long) { /* v2.8.43 */
-      mg_free(pweb->pweb_server, (void *) pweb->response_headers_long, MG_MID_RESPHEADER);
+      mg_free(pweb->pweb_server, (void *) pweb->response_headers_long, 21);
       /* mg_log_event(pweb->plog, pweb, "Release oversize header memory", "mg_web: oversize header", 0); */
    }
-   if (pweb->input_buf_ext) { /* v2.8.45 */
-      mg_free(pweb->pweb_server, (void *) pweb->input_buf_ext, MG_MID_PWEBINPUTEXT);
-   }
 
-   mg_free(pweb->pweb_server, (void *) pweb, MG_MID_PWEB);
+   mg_free(pweb->pweb_server, pweb, 3);
 
    return 0;
 
@@ -3921,7 +3785,7 @@ __try {
    *sname = '\0';
    found = 0;
    len = 4096;
-   pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, MG_MID_COOKIE); /* v2.5.31 */
+   pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, 4); /* v2.5.31 */
    DBX_TRACE(1)
    if (!pweb->request_cookie) {
       return server_no;
@@ -3933,9 +3797,9 @@ __try {
       DBX_TRACE(3)
       if (rc == MG_CGI_TOOLONG) {
          DBX_TRACE(4)
-         mg_free(pweb->pweb_server, (void *) pweb->request_cookie, MG_MID_COOKIE);
+         mg_free(NULL, (void *) pweb->request_cookie, 4);
          len = (n + 2) * 4096;
-         pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, MG_MID_COOKIE);
+         pweb->request_cookie = (char *) mg_malloc(pweb->pweb_server, len + 32, 5);
          if (!pweb->request_cookie) {
             break;
          }
@@ -4157,7 +4021,7 @@ __try {
 
    mg_log_event(&(mg_system.log), NULL, buffer, "mg_web: worker initialization", 0);
 
-/* v2.8.45 */
+/* v2.8.49 */
 #if defined(_WIN32) && defined(MG_PRIVATE_HEAP)
    if (!mg_private_heap) {
       mg_log_event(&(mg_system.log), NULL, "unable to allocate private heap for worker", "mg_web: worker initialization", 0);
@@ -4196,7 +4060,7 @@ __try {
 */
    mg_init_critical_section((void *) &mg_global_mutex);
 
-   mg_system.config = (char *) mg_malloc(NULL, size + size_default + 32, MG_MID_SYSCON);
+   mg_system.config = (char *) mg_malloc(NULL, size + size_default + 32, 6);
    if (!mg_system.config) {
       mg_system.plog = &(mg_system.log);
       mg_system.log.req_no = 0;
@@ -4264,10 +4128,9 @@ __try {
       char buffer[256];
 
       size = 5000000;
-      p = (char *) mg_malloc(NULL, size, MG_MID_DEBUG);
+      p = (char *) mg_malloc(NULL, size, 999);
       sprintf(buffer, "Reserve large memory block; size=%d, p=%p", size, p);
       mg_log_event(&(mg_system.log), NULL, buffer, "mg_web: memory test", 0);
-      mg_free(NULL, (void *) p, MG_MID_DEBUG);
    }
 */
 
@@ -4329,7 +4192,7 @@ __try {
       memset((void *) &web, 0, sizeof(MGWEB));
       web.pcon = pcon;
       mg_release_connection(&web, 1);
-      mg_free(NULL, (void *) pcon, MG_MID_CONNECTION);
+      mg_free(NULL, (void *) pcon, 5);
       pcon = pcon_next;
    }
    mg_connection = NULL;
@@ -4360,7 +4223,7 @@ __try {
    ptls = mg_tls;
    while (ptls) {
       ptls_next = ptls->pnext;
-      mg_free(NULL, (void *) ptls, MG_MID_TLSCON);
+      mg_free(NULL, (void *) ptls, 6);
       ptls = ptls_next;
    }
    mg_tls = NULL;
@@ -4371,11 +4234,11 @@ __try {
       pwsmap = ppath->pwsmap;
       while (pwsmap) {
          pwsmap_next = pwsmap->pnext;
-         mg_free(NULL, (void *) pwsmap, MG_MID_WSCON);
+         mg_free(NULL, (void *) pwsmap, 7);
          pwsmap = pwsmap_next;
       }
       ppath->pwsmap = NULL;
-      mg_free(NULL, (void *) ppath, MG_MID_PATHCON);
+      mg_free(NULL, (void *) ppath, 8);
       ppath = ppath_next;
    }
    mg_path = NULL;
@@ -4383,17 +4246,17 @@ __try {
    psrv = mg_server;
    while (psrv) {
       psrv_next = psrv->pnext;
-      mg_free(NULL, (void *) psrv, MG_MID_SRVCON);
+      mg_free(NULL, (void *) psrv, 9);
       psrv = psrv_next;
    }
    mg_server = NULL;
 
    if (mg_system.config) {
-      mg_free(NULL, (void *) mg_system.config, MG_MID_SYSCON);
+      mg_free(NULL, (void *) mg_system.config, 10);
       mg_system.config = NULL;
    }
 
-/* v2.8.45 */
+/* v2.8.49 */
 #if defined(_WIN32) && defined(MG_PRIVATE_HEAP)
    HeapDestroy(mg_private_heap);
 #endif
@@ -4538,7 +4401,7 @@ __try {
                      len --;
                      word[1][len] = '\0';
                   }
-                  psrv = (MGSRV *) mg_malloc(NULL, sizeof(MGSRV), MG_MID_SRVCON);
+                  psrv = (MGSRV *) mg_malloc(NULL, sizeof(MGSRV), 7);
                   if (!psrv) {
                      strcpy(mg_system.config_error, "Memory allocation error (MGSRV)");
                      break;
@@ -4584,7 +4447,7 @@ __try {
                      word[1][len ++] = '/';
                      word[1][len] = '\0';
                   }
-                  ppath = (MGPATH *) mg_malloc(NULL, sizeof(MGPATH), MG_MID_PATHCON);
+                  ppath = (MGPATH *) mg_malloc(NULL, sizeof(MGPATH), 8);
                   if (!ppath) {
                      strcpy(mg_system.config_error, "Memory allocation error (MGPATH)");
                      break;
@@ -4624,7 +4487,7 @@ __try {
                      len --;
                      word[1][len] = '\0';
                   }
-                  ptls = (MGTLS *) mg_malloc(NULL, sizeof(MGTLS), MG_MID_TLSCON);
+                  ptls = (MGTLS *) mg_malloc(NULL, sizeof(MGTLS), 9);
                   if (!ptls) {
                      strcpy(mg_system.config_error, "Memory allocation error (MGTLS)");
                      break;
@@ -4667,7 +4530,7 @@ __try {
             if (inserver) {
                if (inenv) {
                   if (!psrv->penv) {
-                     psrv->penv = (MGBUF *) mg_malloc(NULL, sizeof(MGBUF), MG_MID_ENVCON);
+                     psrv->penv = (MGBUF *) mg_malloc(NULL, sizeof(MGBUF), 10);
                      if (!psrv->penv) {
                         strcpy(mg_system.config_error, "Memory allocation error (MGBUF:ENV)");
                         break;
@@ -4747,7 +4610,7 @@ __try {
                   }
                   else if (!strcmp(word[0], "websocket")) { /* v2.6.32 */
                      if (wn > 2) {
-                        pwsmap = (MGWSMAP *) mg_malloc(NULL, sizeof(MGWSMAP), MG_MID_WSCON);
+                        pwsmap = (MGWSMAP *) mg_malloc(NULL, sizeof(MGWSMAP), 11);
                         if (pwsmap) {
                            pwsmap->name = word[1];
                            pwsmap->name_len = (int) strlen(pwsmap->name);
@@ -5077,7 +4940,7 @@ int mg_verify_config()
 __try {
 #endif
 
-   pbuf = (char *) mg_malloc(NULL, 8192, MG_MID_CONMSG);
+   pbuf = (char *) mg_malloc(NULL, 8192, 12);
    
    psrv = mg_server;
    if (!psrv) {
@@ -5287,7 +5150,7 @@ mg_verify_config_exit:
    }
 
    if (pbuf) {
-      mg_free(NULL, pbuf, MG_MID_CONMSG);
+      mg_free(NULL, pbuf, 11);
    }
 
    return 0;
@@ -5981,7 +5844,7 @@ int isc_open(MGWEB *pweb)
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_isc_so) {
-      pcon->p_isc_so = (DBXISCSO *) mg_malloc(NULL, sizeof(DBXISCSO), MG_MID_ISC);
+      pcon->p_isc_so = (DBXISCSO *) mg_malloc(NULL, sizeof(DBXISCSO), 13);
       if (!pcon->p_isc_so) {
          strcpy(pweb->error, "No Memory");
          pweb->error_code = 1009;
@@ -6199,7 +6062,7 @@ int isc_error_message(MGWEB *pweb, int error_code)
    size1 = size;
 
    if (pcon->p_isc_so && pcon->p_isc_so->p_CacheErrxlateA) {
-      pcerror = (CACHE_ASTR *) mg_malloc(NULL, sizeof(CACHE_ASTR), MG_MID_ISCSTR);
+      pcerror = (CACHE_ASTR *) mg_malloc(NULL, sizeof(CACHE_ASTR), 14);
       if (pcerror) {
          pcerror->str[0] = '\0';
          pcerror->len = 50;
@@ -6215,7 +6078,7 @@ int isc_error_message(MGWEB *pweb, int error_code)
             strncpy(pweb->error, (char *) pcerror->str, len);
             pweb->error[len] = '\0';
          }
-         mg_free(NULL, (void *) pcerror, MG_MID_ISCSTR);
+         mg_free(NULL, (void *) pcerror, 12);
          size1 -= (int) strlen(pweb->error);
       }
    }
@@ -6559,7 +6422,7 @@ int ydb_open(MGWEB *pweb)
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_ydb_so) {
-      pcon->p_ydb_so = (DBXYDBSO *) mg_malloc(NULL, sizeof(DBXYDBSO), MG_MID_YDB);
+      pcon->p_ydb_so = (DBXYDBSO *) mg_malloc(NULL, sizeof(DBXYDBSO), 15);
       if (!pcon->p_ydb_so) {
          strcpy(pweb->error, "No Memory");
          pweb->error_code = 1009; 
@@ -6875,7 +6738,7 @@ int gtm_open(MGWEB *pweb)
    rc = CACHE_SUCCESS;
 
    if (!pcon->p_gtm_so) {
-      pcon->p_gtm_so = (DBXGTMSO *) mg_malloc(NULL, sizeof(DBXGTMSO), MG_MID_GTM);
+      pcon->p_gtm_so = (DBXGTMSO *) mg_malloc(NULL, sizeof(DBXGTMSO), 16);
       if (!pcon->p_gtm_so) {
          strcpy(pweb->error, "No Memory");
          pweb->error_code = 1009; 
@@ -7043,14 +6906,14 @@ int mg_buf_init(MGBUF *p_buf, int size, int increment_size)
 {
    int result;
 
-   p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char) * (size + 1), MG_MID_BUF);
+   p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char) * (size + 1), 17);
    if (p_buf->p_buffer) {
       *(p_buf->p_buffer) = '\0';
       result = 1;
    }
    else {
       result = 0;
-      p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char), MG_MID_BUF);
+      p_buf->p_buffer = (unsigned char *) mg_malloc(NULL, sizeof(char), 18);
       if (p_buf->p_buffer) {
          *(p_buf->p_buffer) = '\0';
          size = 1;
@@ -7075,7 +6938,7 @@ int mg_buf_resize(MGBUF *p_buf, unsigned long size)
    if (size < p_buf->size)
       return 1;
 
-   p_buf->p_buffer = (unsigned char *) mg_realloc(NULL, (void *) p_buf->p_buffer, 0, sizeof(char) * size, MG_MID_BUF);
+   p_buf->p_buffer = (unsigned char *) mg_realloc(NULL, (void *) p_buf->p_buffer, 0, sizeof(char) * size, 1);
    p_buf->size = size;
 
    return 1;
@@ -7088,7 +6951,7 @@ int mg_buf_free(MGBUF *p_buf)
       return 0;
 
    if (p_buf->p_buffer)
-      mg_free(NULL, (void *) p_buf->p_buffer, MG_MID_BUF);
+      mg_free(NULL, (void *) p_buf->p_buffer, 13);
 
    p_buf->p_buffer = NULL;
    p_buf->size = 0;
@@ -7160,7 +7023,7 @@ int mg_buf_cat(MGBUF *p_buf, char *buffer, unsigned long size)
          if (p_temp) {
             memcpy((void *) p_buf->p_buffer, (void *) p_temp, tsize);
             p_buf->data_size = tsize;
-            mg_free(NULL, (void *) p_temp, MG_MID_BUF);
+            mg_free(NULL, (void *) p_temp, 14);
          }
       }
       else
@@ -7185,7 +7048,7 @@ void * mg_malloc(void *pweb_server, int size, short id)
    }
    else {
 #if defined(_WIN32)
-/* v2.8.45 */
+/* v2.8.49 */
 #if defined(MG_PRIVATE_HEAP)
       if (mg_private_heap) {
          p = (void *) HeapAlloc(mg_private_heap, HEAP_ZERO_MEMORY, size + 32);
@@ -7230,7 +7093,7 @@ void * mg_realloc(void *pweb_server, void *p, int curr_size, int new_size, short
    else {
       if (new_size >= curr_size) {
          if (p) {
-            mg_free(pweb_server, (void *) p, id);
+            mg_free(NULL, (void *) p, 15);
          }
          p = (void *) mg_malloc(pweb_server, new_size, id);
       }
@@ -7260,7 +7123,7 @@ int mg_free(void *pweb_server, void *p, short id)
    }
    else {
 #if defined(_WIN32)
-/* v2.8.45 */
+/* v2.8.49 */
 #if defined(MG_PRIVATE_HEAP)
       if (mg_private_heap) {
          HeapFree(mg_private_heap, 0, p);
@@ -8797,7 +8660,9 @@ int netx_tcp_ping(MGWEB *pweb, int context)
       mg_log_buffer(&(mg_system.log), pweb, (char *) netbuf, rc, bufferx, 0);
    }
 */
-
+   if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
+      return rc;
+   }
    if (rc < 0) {
       return rc;
    }
@@ -8926,19 +8791,13 @@ netx_tcp_command_reconnect:
    pweb->output_val.svalue.len_used = 0;
 
    rc = netx_tcp_read(pweb, (unsigned char *) pweb->output_val.svalue.buf_addr, offset, pcon->timeout, 1);
-
 /*
    {
       char bufferx[256];
       sprintf(bufferx, "netx_tcp_command RECV rc=%d; pcon->connected=%d;", rc, pcon->connected);
-#if 1
-      mg_log_event(&(mg_system.log), pweb, bufferx, "netx_tcp_command", 0);
-#else
       mg_log_buffer(&(mg_system.log), pweb, netbuf, netbuf_used, bufferx, 0);
-#endif
    }
 */
-
    if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
       return rc;
    }
@@ -8979,26 +8838,18 @@ netx_tcp_command_reconnect:
 /*
    {
       char buffer[256];
-      sprintf(buffer, "rc=%d; sort=%d; type=%d; response_size=%d; buffer_size=%d; get=%d; response_streamed=%d;", rc, pweb->output_val.sort, pweb->output_val.type, pweb->response_size, pweb->output_val.svalue.len_alloc, (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE), pweb->response_streamed);
+      sprintf(buffer, "rc=%d; sort=%d; type=%d; response_size=%d; buffer_size=%d; get=%d;", rc, pweb->output_val.sort, pweb->output_val.type, pweb->response_size, pweb->output_val.svalue.len_alloc, (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE));
       mg_log_event(pweb->plog, pweb, buffer, "netx_tcp_read", 0);
    }
 */
-
    get = 0;
    if (pweb->response_size > 0) {
       get = pweb->response_size - 5; /* first 5 Bytes already read */
       if (pweb->response_size > (unsigned int) (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE)) {
          get = (pweb->output_val.svalue.len_alloc - DBX_HEADER_SIZE);
-         pweb->response_remaining = (pweb->response_size - (get + 5)); /* v2.8.48 don't forget to factor-in 5 Bytes of header */
+         pweb->response_remaining = (pweb->response_size - get);
       }
       netx_tcp_read(pweb, (unsigned char *) pweb->output_val.svalue.buf_addr + offset, get, pcon->timeout, 1);
-/*
-      {
-         char buffer[256];
-         sprintf(buffer, "rc=%d; just read=%d; pweb->response_size=%d; pweb->response_remaining=%d;", rc, get, pweb->response_size, pweb->response_remaining);
-         mg_log_event(pweb->plog, pweb, buffer, "netx_tcp_read", 0);
-      }
-*/
    }
 
    if (pweb->output_val.type == DBX_DTYPE_OREF) {
@@ -9082,7 +8933,7 @@ __try {
                mg_log_buffer(pweb->plog, pweb, pval->svalue.buf_addr, pval->svalue.len_used + (rc > 0 ? rc : 0), bufferx, 0);
             }
 */
-            if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.45 */
+            if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.49 */
                break;
             }
             else if (rc == 0) {
@@ -9145,7 +8996,7 @@ __try {
                }
                else {
                   /* 2.0.8 */
-                  pval = mg_extend_response_memory(pweb, DBX_BUFFER_EXTENSION);
+                  pval = mg_extend_response_memory(pweb);
                   if (!pval) {
                      rc = NETX_READ_ERROR;
                      break;
@@ -9160,7 +9011,7 @@ __try {
 
    if (pweb->response_remaining == 0) {
       rc = netx_tcp_read(pweb, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
-      if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.45 */
+      if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF) {
          return rc;
       }
       if (pweb->db_chunk_head[0] == 0xff && pweb->db_chunk_head[1] == 0xff && pweb->db_chunk_head[2] == 0xff && pweb->db_chunk_head[3] == 0xff) {
@@ -9173,59 +9024,41 @@ __try {
    }
 
    if (pweb->response_remaining == 0) {
-      return NETX_READ_ENDSTREAM;
+      return NETX_READ_ENDSTREAM; /* v2.8.49 */
    }
 
    for (;;) {
-      /* v2.8.45 make sure that our buffer is large enough to accommodate a DB Server chunk */
-      if (pweb->response_remaining >= (unsigned int) (pval->svalue.len_alloc - pval->svalue.len_used)) {
-         /* v2.8.46 cope with scenario where we don't have enough buffer space to accommodate a single DB Server chunk of response data */
-/*
-         char buffer[256];
-         sprintf(buffer, "insufficient buffer space to hold DB Server response chunk (bytes available=%d; required=%d)", (int) pval->svalue.len_alloc, (int) pweb->response_remaining);
-         mg_log_event(pweb->plog, pweb, buffer, "mg_web: buffer size error - contact mg_web support", 0);
-         rc = NETX_READ_ERROR;
-         break;
-*/
-         get = (int) (pval->svalue.len_alloc - pval->svalue.len_used);
-      }
-      else {
-         get = pweb->response_remaining;
-      }
-      rc = netx_tcp_read(pweb, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, get, pcon->timeout, 1);
+      rc = netx_tcp_read(pweb, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, pweb->response_remaining, pcon->timeout, 1);
 /*
       {
          char bufferx[256];
-         sprintf(bufferx, "Chunked response from DB Server: rc=%d; get=%d; pweb->response_remaining=%d;", rc, get, pweb->response_remaining);
+         sprintf(bufferx, "Chunked response from DB Server: rc=%d; pweb->response_remaining=%d;", rc, pweb->response_remaining);
          mg_log_event(pweb->plog, pweb, bufferx, "mg_web: Read response", 0);
       }
 */
 
-      if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.45 */
+      if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.49 */
          break;
       }
 
-      MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, (pval->svalue.buf_addr + pval->svalue.len_used), get);
+      MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, (pval->svalue.buf_addr + pval->svalue.len_used), pweb->response_remaining);
 
-      pval->svalue.len_used += get;
-      pweb->response_size += get;
-      pweb->response_remaining -= get;
+      pval->svalue.len_used += pweb->response_remaining;
+      pweb->response_size += pweb->response_remaining;
 
-      if (pweb->response_remaining == 0) { /* get next DB Server chunk */
-         rc = netx_tcp_read(pweb, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
-         if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.45 */
-            break;
-         }
-
-         if (pweb->db_chunk_head[0] == 0xff && pweb->db_chunk_head[1] == 0xff && pweb->db_chunk_head[2] == 0xff && pweb->db_chunk_head[3] == 0xff) {
-            pweb->response_remaining = 0;
-            MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
-            rc = CACHE_SUCCESS;
-            break;
-         }
-         pweb->response_remaining = mg_get_size((unsigned char *) pweb->db_chunk_head);
-         MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
+      rc = netx_tcp_read(pweb, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
+      if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.49 */
+         break;
       }
+
+      if (pweb->db_chunk_head[0] == 0xff && pweb->db_chunk_head[1] == 0xff && pweb->db_chunk_head[2] == 0xff && pweb->db_chunk_head[3] == 0xff) {
+         pweb->response_remaining = 0;
+         MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
+         rc = CACHE_SUCCESS;
+         break;
+      }
+      pweb->response_remaining = mg_get_size((unsigned char *) pweb->db_chunk_head);
+      MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
       /* if ((pval->svalue.len_used + pweb->response_size) > (unsigned int) (pval->svalue.len_alloc - DBX_HEADER_SIZE)) { */
       if ((pval->svalue.len_used + pweb->response_remaining) > (unsigned int) (pval->svalue.len_alloc - DBX_HEADER_SIZE)) { /* v2.1.14 */
 /*
@@ -9250,7 +9083,7 @@ __try {
             }
             else {
                /* 2.0.8 */
-               pval = mg_extend_response_memory(pweb, pweb->response_remaining + 32); /* v2.8.47 */
+               pval = mg_extend_response_memory(pweb);
                if (!pval) {
                   rc = NETX_READ_ERROR;
                   break;
@@ -9600,14 +9433,9 @@ int netx_tcp_read(MGWEB *pweb, unsigned char *data, int size, int timeout, int c
    {
       char bufferx[1024];
       sprintf(bufferx, "netx_tcp_read size=%d; context=%d; result=%d;", size, context, result);
-#if 1
-      mg_log_event(pweb->plog, pweb, bufferx, "debug: netx_tcp_read", 0);
-#else
-      mg_log_buffer(pweb->plog, pweb, (char *) data, len > 0 ? len : 0, bufferx, 0);
-#endif
+      mg_log_buffer(pweb->plog, pweb, data, len > 0 ? len : 0, bufferx, 0);
    }
 */
-
    return result;
 }
 
