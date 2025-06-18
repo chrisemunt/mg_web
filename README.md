@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-15 June 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+18 June 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 48.
+* Current Release: Version: 2.8; Revision 49.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -363,22 +363,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
    * Correct a fault in the buffer allocation for (particularly large) HTTP response headers.
       * The symptom of this problem (for Windows hosts) is the following Event Log message: Exception caught in f:mg_web_process: c0000005:40
 
-### v2.8.44 (1 May 2025)
+### v2.8.49 (18 June 2025):
    * Check that there's enough memory available to service a web request before proceeding.
       * If a web server host is low in memory, an HTTP 500 error will be immediately returned to the client and a "Memory Allocation" error written to the event log.
-
-### v2.8.45 (12 May 2025)
-   * Review the default amount of memory reserved for processing requests.
-      * 10K will be reserved by default. This is the minimum, more can be reserved by specifying a value in the 'request_buffer_size' parameter.  For example: request_buffer_size 32KB
-
-### v2.8.46 (16 May 2025)
-   * Cope with the scenario where **mg\_web** doesn't have enough buffer space to accommodate a single DB Server chunk of response data.
-      * Under these circumstances, previous versions would report the error: "insufficient buffer space to hold DB Server response chunk" ...
-   * This correction is loosely related to version 2.8.45 in that the problem only occurs when **mg\_web** is configured to reserve relatively small amounts of data for processing requests.
-
-### v2.8.47 (19 May 2025)
-   * Correct a minor fault in the framing of chunked response payloads (Transfer-Encoding: chunked).
-
-### v2.8.48 (15 June 2025)
-   * Correct a fault in sizing of the response payload (related to 2.8.45).
-
+   * Use a private heap for Windows based web servers to limit the scope for contention between **mg\_web** and other web server addon modules.
+   * Ensure that the client side of TCP sockets are closed when the DB Server closes its (server-side) end. 
