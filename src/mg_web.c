@@ -224,22 +224,22 @@ Version 2.8.44 1 May 2025:
    - If a web server host is low in memory, an HTTP 500 error will be immediately returned to the client and a "Memory Allocation" error written to the event log.
    - A non-change: add unique IDs (MG_MID* labels) to all memory allocation and free calls.
 
-Version 2.8.45 12 May 2025:
+Version 3.0.45 12 May 2025:
    Review the default amount of memory reserved for processing requests.
    - 10K will be reserved by default. This is the minimum, more can be reserved by specifying a value in the 'request_buffer_size' parameter.
    - Example: request_buffer_size 100KB
-   Use a private heap for Windows based web servers.
+   Use a private heap for Windows based web servers to limit the scope for contention between mg_web and other web server addon modules.
    Ensure that the client side of TCP sockets are closed when the DB Server closes its (server-side) end. 
 
-Version 2.8.46 16 May 2025:
+Version 3.1.46 16 May 2025:
    Cope with scenario where mg_web doesn't have enough buffer space to accommodate a single DB Server chunk of response data.
    - Previous versions would report the error: ""insufficient buffer space to hold DB Server response chunk" ...
    This correction is loosely related to version 2.8.45 in that the problem only occurs when mg_web reserves low amounts of data for processing requests.
 
-Version 2.8.47 19 May 2025:
+Version 3.1.47 19 May 2025:
    Correct a minor fault in the framing of chunked response payloads (Transfer-Encoding: chunked).
 
-Version 2.8.48 15 June 2025:
+Version 3.1.48 15 June 2025:
    Correct a fault in sizing of the response payload (related to 2.8.45).
 
 */

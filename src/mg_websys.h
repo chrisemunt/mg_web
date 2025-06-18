@@ -36,13 +36,13 @@
 #define MG_PRIVATE_HEAP          1
 #endif
 
-#define MAJORVERSION             2
-#define MINORVERSION             8
+#define MAJORVERSION             3
+#define MINORVERSION             1
 #define MAINTVERSION             48
 #define BUILDNUMBER              0
 
-#define DBX_VERSION_MAJOR        "2"
-#define DBX_VERSION_MINOR        "8"
+#define DBX_VERSION_MAJOR        "3"
+#define DBX_VERSION_MINOR        "1"
 #define DBX_VERSION_BUILD        "48"
 
 #define DBX_VERSION              DBX_VERSION_MAJOR "." DBX_VERSION_MINOR "." DBX_VERSION_BUILD
