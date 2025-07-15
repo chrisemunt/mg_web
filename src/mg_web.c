@@ -250,6 +250,10 @@ Version 3.1.50 5 July 2025:
       mg_web_execute: YottaDB API error
       Insufficient buffer space (response size: 12811; buffer space: 10496). Increase the 'request_buffer_size' in the configuration
 
+Version 3.1.51 15 July 2025: CMT51
+   Check that there are viable alternative servers before invoking the failover mechanism.
+   - With previous builds, a looping condition would occur if all the alternative servers were marked as for "exclusive use".  
+
 */
 
 
@@ -848,10 +852,12 @@ mg_web_process_failover:
       }
       /* v2.1.16 : DB Servers marked for exclusive use cannot failover to another server in the list */
       if (pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no && pweb->ppath->servers[pweb->server_no].exclusive == 0) {
-         sprintf(pweb->error, "Cannot connect to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
-         mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
-         failover_no ++;
-         goto mg_web_process_failover;
+         if (mg_server_alternatives(pweb, pweb->psrv, info, 0) > 0) { /* CMT51 any viable alternatives? */
+            sprintf(pweb->error, "Cannot connect to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
+            mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
+            failover_no ++;
+            goto mg_web_process_failover;
+         }
       }
 
       pweb->response_headers = (char *) pweb->output_val.svalue.buf_addr + (pweb->output_val.svalue.len_used + 4);
@@ -1092,10 +1098,12 @@ mg_web_process_failover:
       }
       /* v2.1.16 : DB Servers marked for exclusive use cannot failover to another server in the list */
       if (pweb->failover_possible && pweb->ppath->srv_max > 1 && pweb->ppath->srv_max > failover_no && pweb->ppath->servers[pweb->server_no].exclusive == 0) {
-         sprintf(pweb->error, "Cannot send request to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
-         mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
-         failover_no ++;
-         goto mg_web_process_failover;
+         if (mg_server_alternatives(pweb, pweb->psrv, info, 0) > 0) { /* CMT51 any viable alternatives? */
+            sprintf(pweb->error, "Cannot send request to DB Server %s; attempting to failover", pweb->psrv ? pweb->psrv->name : "null");
+            mg_log_event(pweb->plog, pweb, pweb->error, "mg_web: connectivity error", 0);
+            failover_no ++;
+            goto mg_web_process_failover;
+         }
       }
    }
 
@@ -2935,6 +2943,9 @@ __try {
       if (!pweb->ppath->servers[1].psrv) { /* only one server, therefore no failover */
          return -1;
       }
+      if (mg_server_alternatives(pweb, psrv, info, context) == 0) { /* CMT51 no viable alternatives */
+         return -1;
+      }
    }
 
    DBX_TRACE(1)
@@ -3022,6 +3033,9 @@ __try {
    if (!pweb->ppath->servers[1].psrv) { /* only one server, therefore no server list for failover */
       return -1;
    }
+   if (mg_server_alternatives(pweb, psrv, info, context) == 0) { /* CMT51 no viable alternatives */
+      return -1;
+   }
 
    if (context) {
       /* block new connections to this server */
@@ -3067,6 +3081,69 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 #endif
 }
 
+/* CMT51 */
+int mg_server_alternatives(MGWEB *pweb, MGSRV *psrv, char *info, int context)
+{
+   DBX_TRACE_INIT(0)
+   int n, nalt;
+
+#ifdef _WIN32
+__try {
+#endif
+
+   if (!pweb->ppath) {
+      return 0;
+   }
+   if (!pweb->ppath->servers[1].psrv) { /* only one server, therefore no server list for failover */
+      return 0;
+   }
+
+   nalt = 0;
+   for (n = 0; pweb->ppath->servers[n].psrv; n ++) {
+      if (n < 32) {
+         if (pweb->ppath->servers[n].exclusive == 0) {
+            nalt ++;
+         }
+      }
+      else {
+         break;
+      }
+   }
+
+   if (nalt > 0) {
+      nalt --; /* discounting the current server */
+   }
+
+/*
+   {
+      char buffer[256];
+      sprintf(buffer, "Number of possible alternative servers in configuration: %d", nalt);
+      mg_log_event(pweb->plog, pweb, buffer, "Alternative Servers", 0);
+   }
+*/
+
+   return nalt;
+
+#ifdef _WIN32
+}
+__except (EXCEPTION_EXECUTE_HANDLER) {
+
+   DWORD code;
+   char bufferx[256];
+
+   __try {
+      code = GetExceptionCode();
+      sprintf_s(bufferx, 255, "Exception caught in f:mg_server_alternatives: %x:%d", code, DBX_TRACE_VAR);
+      mg_log_event(pweb->plog, pweb, bufferx, "Error Condition", 0);
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER) {
+      ;
+   }
+
+   return 0;
+}
+#endif
+}
 
 int mg_connect(MGWEB *pweb, int context)
 {

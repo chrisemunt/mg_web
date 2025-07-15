@@ -1464,6 +1464,7 @@ int                     mg_obtain_connection          (MGWEB *pweb);
 int                     mg_obtain_server              (MGWEB *pweb, char *info, int context);
 int                     mg_server_offline             (MGWEB *pweb, MGSRV *psrv, char *info, int context);
 int                     mg_server_online              (MGWEB *pweb, MGSRV *psrv, char *info, int context);
+int                     mg_server_alternatives        (MGWEB *pweb, MGSRV *psrv, char *info, int context); /* CMT51 */
 int                     mg_connect                    (MGWEB *pweb, int context);
 int                     mg_release_connection         (MGWEB *pweb, int close_connection);
 MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsigned long request_clen, int request_chunked, int wstype);
