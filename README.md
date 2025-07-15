@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-18 June 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+15 July 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 49.
+* Current Release: Version: 2.8; Revision 43b.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -363,8 +363,12 @@ Unless required by applicable law or agreed to in writing, software distributed 
    * Correct a fault in the buffer allocation for (particularly large) HTTP response headers.
       * The symptom of this problem (for Windows hosts) is the following Event Log message: Exception caught in f:mg_web_process: c0000005:40
 
-### v2.8.49 (18 June 2025):
+### v2.8.43a (18 June 2025):
    * Check that there's enough memory available to service a web request before proceeding.
       * If a web server host is low in memory, an HTTP 500 error will be immediately returned to the client and a "Memory Allocation" error written to the event log.
    * Use a private heap for Windows based web servers to limit the scope for contention between **mg\_web** and other web server addon modules.
    * Ensure that the client side of TCP sockets are closed when the DB Server closes its (server-side) end. 
+
+### v2.8.43b (15 July 2025):
+   * Check that there are viable alternative servers before invoking the failover mechanism.
+      * With previous builds, a looping condition would occur if all the alternative servers were marked as for "exclusive use".  
