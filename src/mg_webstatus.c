@@ -580,7 +580,7 @@ __try {
    pweb->response_headers_len = (int) strlen(pweb->response_headers);
 
    mg_submit_headers(pweb);
-   mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) pweb->response_clen);
+   mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) pweb->response_clen, 207);
 */
    return CACHE_SUCCESS;
 
@@ -668,7 +668,7 @@ __try {
             padm->buf_addr = (pweb->response_content - len);
             padm->len_used = (pweb->response_clen + len);
             memcpy((void *) padm->buf_addr, (void *) buffer, (size_t) len);
-            mg_client_write(pweb, (unsigned char *) padm->buf_addr, (int) padm->len_used);
+            mg_client_write(pweb, (unsigned char *) padm->buf_addr, (int) padm->len_used, 201);
             padm->buf_addr = pweb->response_content;
             padm->len_used = 0;
             pweb->response_clen = 0;
@@ -711,7 +711,7 @@ __try {
          padm->len_used = pweb->response_clen;
       }
       if (padm->len_used) {
-         mg_client_write(pweb, (unsigned char *) padm->buf_addr, (int) padm->len_used);
+         mg_client_write(pweb, (unsigned char *) padm->buf_addr, (int) padm->len_used, 202);
       }
    }
    else {
@@ -720,7 +720,7 @@ __try {
       pweb->response_headers_len = (int) strlen(pweb->response_headers);
 
       mg_submit_headers(pweb);
-      mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) pweb->response_clen);
+      mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) pweb->response_clen, 203);
    }
 
    return CACHE_SUCCESS;
@@ -783,7 +783,7 @@ __try {
             padm->len_used = pweb->response_clen;
          }
          if (padm->len_used) {
-            mg_client_write(pweb, (unsigned char *) padm->buf_addr, (int) padm->len_used);
+            mg_client_write(pweb, (unsigned char *) padm->buf_addr, (int) padm->len_used, 204);
          }
       }
       else {
@@ -792,7 +792,7 @@ __try {
          pweb->response_headers_len = (int) strlen(pweb->response_headers);
 
          mg_submit_headers(pweb);
-         mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) pweb->response_clen);
+         mg_client_write(pweb, (unsigned char *) pweb->response_content, (int) pweb->response_clen, 205);
       }
       return CACHE_SUCCESS;
    }
@@ -839,7 +839,7 @@ __try {
    padm->buf_addr = (pweb->response_content - len);
    padm->len_used = (pweb->response_clen + len);
    memcpy((void *) padm->buf_addr, (void *) buffer, (size_t) len);
-   mg_client_write(pweb, (unsigned char *) padm->buf_addr, (int) padm->len_used);
+   mg_client_write(pweb, (unsigned char *) padm->buf_addr, (int) padm->len_used, 206);
    padm->buf_addr = pweb->response_content;
    padm->len_used = 0;
    pweb->response_clen = 0;

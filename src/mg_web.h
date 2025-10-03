@@ -1385,7 +1385,7 @@ extern MG_FREE       mg_ext_free;
 /* From web server interface code page */
 int                     mg_get_cgi_variable           (MGWEB *pweb, char *name, char *pbuffer, int *pbuffer_size);
 int                     mg_client_gone                (MGWEB *pweb);
-int                     mg_client_write               (MGWEB *pweb, unsigned char *pbuffer, int buffer_size);
+int                     mg_client_write               (MGWEB *pweb, unsigned char *pbuffer, int buffer_size, int context);
 int                     mg_client_write_now           (MGWEB *pweb, unsigned char *pbuffer, int buffer_size);
 int                     mg_client_read                (MGWEB *pweb, unsigned char *pbuffer, int buffer_size);
 int                     mg_suppress_headers           (MGWEB *pweb);
@@ -1433,7 +1433,7 @@ MGWEB *                 mg_obtain_request_memory      (void *pweb_server, unsign
 DBXVAL *                mg_extend_response_memory     (MGWEB *pweb);
 int                     mg_release_request_memory     (MGWEB *pweb);
 int                     mg_find_sa_variable           (MGWEB *pweb);
-int                     mg_find_sa_variable_ex        (MGWEB *pweb, char *name, int name_len, unsigned char *nvpairs, int nvpairs_len);
+int                     mg_find_sa_variable_ex        (MGWEB *pweb, char *name, int name_len, unsigned char *nvpairs, int nvpairs_len, int context);
 int                     mg_find_sa_variable_ex_mp     (MGWEB *pweb, char *name, int name_len, unsigned char *content, int content_len); /* v2.1.15 */
 int                     mg_find_sa_cookie             (MGWEB *pweb);
 int                     mg_worker_init                ();
