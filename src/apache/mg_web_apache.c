@@ -1183,7 +1183,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
-int mg_client_write(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
+int mg_client_write(MGWEB *pweb, unsigned char *pbuffer, int buffer_size, int context)
 {
    apr_bucket *b;
    MGWEBAPACHE *pwebapache;
