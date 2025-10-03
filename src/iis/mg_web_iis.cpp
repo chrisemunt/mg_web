@@ -148,7 +148,7 @@ public:
 
       pweb = mg_obtain_request_memory((void *) pwebiis, request_clen, request_chunked, MG_WS_IIS); /* v2.7.33 */
       if (!pweb) { /* v2.8.44 can't even allocate memory to serve request */
-         sprintf(buffer, "Cannot obtain memory to serve request: Content-Length=%d", request_clen);
+         sprintf_s(buffer, 255, "Cannot obtain memory to serve request: Content-Length=%d", request_clen);
          mg_log_event(&(mg_system.log), NULL, buffer, "Memory allocation error (MGWEB *)", 0);
          /* Set the HTTP status. */
          pHttpResponse->SetStatus(500, "Server Error", 0, S_OK);
@@ -541,7 +541,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
-int mg_client_write(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
+int mg_client_write(MGWEB *pweb, unsigned char *pbuffer, int buffer_size, int context)
 {
    short phase;
    int result, total, max;
@@ -566,6 +566,14 @@ __try {
    result = 0;
    total = 0;
    sent = 0;
+
+   /* CMT52 protect against bad buffer size */
+   if (buffer_size > (int) pweb->output_val.svalue.len_alloc) {
+      char buffer[256];
+      sprintf_s(buffer, 255, "Invalid arguments in f:mg_write_client (context=%d; buffer_size=%d)", context, buffer_size);
+      mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
+      return -1;
+   }
 
    for (;;) {
       max = (buffer_size - total);
@@ -609,7 +617,7 @@ __try {
       ((IHttpEventProvider *) ((MGWEBIIS *) pweb->pweb_server)->pprovider)->SetErrorStatus(hr);
       /* End additional processing. */
       ((MGWEBIIS *) pweb->pweb_server)->exit_code = MGWEB_RQ_NOTIFICATION_FINISH_REQUEST;
-      result = 0;
+      result = -1;
    }
 
    phase = 9;
@@ -625,14 +633,14 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 
    __try {
       code = GetExceptionCode();
-      sprintf_s(buffer, 255, "Exception caught in f:mg_write_client: %x:%d (buffer_size=%d; total=%d; max=%d; sent=%d; result=%d)", code, phase, buffer_size, total, max, sent, result);
+      sprintf_s(buffer, 255, "Exception caught in f:mg_write_client: %x:%d (context=%d; buffer_size=%d; total=%d; max=%d; sent=%d; result=%d)", code, phase, context, buffer_size, total, max, sent, result);
       mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
    }
    __except (EXCEPTION_EXECUTE_HANDLER ) {
       ;
    }
 
-   return 0;
+   return -1;
 }
 #endif
 
@@ -642,7 +650,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 /* v2.7.33 */
 int mg_client_write_now(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
 {
-   return mg_client_write(pweb, pbuffer, buffer_size);
+   return mg_client_write(pweb, pbuffer, buffer_size, 1);
 }
 
 
@@ -695,6 +703,10 @@ int mg_submit_headers(MGWEB *pweb)
 __try {
 #endif
 
+   if (!pweb->response_headers) { /* CMT52 */
+      return -1;
+   }
+
    ((IHttpResponse *) ((MGWEBIIS *) pweb->pweb_server)->phttp_response)->ClearHeaders();
 
    phase = 1;
@@ -737,21 +749,22 @@ __try {
          phase = 5;
       }
       else {
+         phase = 6;
          p1 = strstr(pa, ":");
          if (p1) {
             *p1 = '\0';
             p1 ++;
             while (*p1 == ' ')
                p1 ++;
-            phase = 6;
-            hr = ((IHttpResponse *) ((MGWEBIIS *) pweb->pweb_server)->phttp_response)->SetHeader((PCSTR) pa, (PCSTR) p1, (USHORT) strlen(p1), FALSE);
             phase = 7;
+            hr = ((IHttpResponse *) ((MGWEBIIS *) pweb->pweb_server)->phttp_response)->SetHeader((PCSTR) pa, (PCSTR) p1, (USHORT) strlen(p1), FALSE);
+            phase = 8;
          }
       }
       pa = (pz + 2);
    }
 
-   phase = 9;
+   phase = 100;
 
    return 0;
 
@@ -1074,7 +1087,7 @@ int mg_websocket_write(MGWEB *pweb, char *buffer, int len)
 {
    int rc;
 
-   rc = mg_client_write(pweb, (unsigned char *) buffer, (int) len);
+   rc = mg_client_write(pweb, (unsigned char *) buffer, (int) len, 2);
    return rc;
 }
 
