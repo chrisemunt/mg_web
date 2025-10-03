@@ -1739,7 +1739,7 @@ __except (EXCEPTION_EXECUTE_HANDLER) {
 }
 
 
-int mg_client_write(MGWEB *pweb, unsigned char *pbuffer, int buffer_size)
+int mg_client_write(MGWEB *pweb, unsigned char *pbuffer, int buffer_size, int context)
 {
    ngx_chain_t *c;
    ngx_buf_t *b;
