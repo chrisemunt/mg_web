@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-15 July 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+3 October 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 43b.
+* Current Release: Version: 2.8; Revision 43c.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -371,4 +371,13 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 ### v2.8.43b (15 July 2025):
    * Check that there are viable alternative servers before invoking the failover mechanism.
-      * With previous builds, a looping condition would occur if all the alternative servers were marked as for "exclusive use".  
+      * With previous builds, a looping condition would occur if all the alternative servers were marked as for "exclusive use". 
+
+### v2.8.43c (3 October 2025):
+   * Correct and add protection against the faults leading to the following Windows exceptions.
+      * Exception caught in f:mg_find_sa_variable_ex: c0000005:0
+      * Exception caught in f:mg_web_http_error: c0000005:0
+      * Exception caught in f:mg_submit_headers: c0000005:2
+      * Exception caught in f:mg_write_client: c0000005:1 (buffer_size=874524974; total=120000; max=60000; sent=512; result=0)
+
+ 
