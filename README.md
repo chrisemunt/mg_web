@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-3 October 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+5 October 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 43c.
+* Current Release: Version: 2.8; Revision 43d.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -379,5 +379,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
       * Exception caught in f:mg_web_http_error: c0000005:0
       * Exception caught in f:mg_submit_headers: c0000005:2
       * Exception caught in f:mg_write_client: c0000005:1 (buffer_size=874524974; total=120000; max=60000; sent=512; result=0)
+
+### v2.8.43d (5 October 2025):
+   * Introduce additional checks for clients terminating their request before a full response has been delivered.
+   * Improve the performance of request where the response payload is delivered as the output from the web function (i.e. non-stream mode).
+
 
  
