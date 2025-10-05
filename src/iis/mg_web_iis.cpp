@@ -568,7 +568,7 @@ __try {
    sent = 0;
 
    /* CMT52 protect against bad buffer size */
-   if (buffer_size > (int) pweb->output_val.svalue.len_alloc) {
+   if (buffer_size > DBX_LS_BUFFER_ISC) {
       char buffer[256];
       sprintf_s(buffer, 255, "Invalid arguments in f:mg_write_client (context=%d; buffer_size=%d)", context, buffer_size);
       mg_log_event(pweb->plog, NULL, buffer, "Error Condition", 0);
