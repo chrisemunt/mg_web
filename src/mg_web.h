@@ -1417,6 +1417,7 @@ int                     mg_execute_request_long       (MGWEB *pweb, int (*p_writ
 int                     mg_write_chunk_tcp            (MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no);
 int                     mg_write_chunk_isc            (MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no);
 int                     mg_write_chunk_ydb            (MGWEB *pweb, unsigned char *netbuf, unsigned int netbuf_used, int chunk_no);
+char *                  mg_web_response_headers_buffer(MGWEB *pweb, int size, int context);
 int                     mg_web_http_error             (MGWEB *pweb, int http_status_code, int custompage);
 int                     mg_web_simple_response        (MGWEB *pweb, char *text, char *error, int context);
 int                     mg_get_all_cgi_variables      (MGWEB *pweb);
