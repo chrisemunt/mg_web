@@ -382,7 +382,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 ### v2.8.43d (5 October 2025):
    * Introduce additional checks for clients terminating their request before a full response has been delivered.
-   * Improve the performance of request where the response payload is delivered as the output from the web function (i.e. non-stream mode).
+   * Improve the performance of requests where the response payload is delivered as the output from the web function (i.e. non-stream mode).
 
 
  
