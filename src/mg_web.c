@@ -240,6 +240,12 @@ Version 2.8.43d 5 October 2025: CMT53
    Introduce additional checks for clients terminating their request before a full response has been delivered.
    Improve the performance of request where the response payload is delivered as the output from the web function (i.e. non-stream mode).
 
+Version 2.8.43e 8 October 2025: CMT54
+   Introduce additional integrity checks for the data block transmission protocol between the DB Server and mg_web - $$stream^%zmgsis()
+   - If this protocol becomes corrupted on account of application code resetting the DB Server's primary device, the 4-Byte header representing the following data size is lost.
+   - If mg_web detects this fault, it will immediately switch to plain data stream mode (as used in streamascii^%zmgsis()).
+   - The following message will be written to the event log: "Invalid buffer returned from DB Server (size=825318267; context=1). Consider using the 'streamascii' transmission protocol." 
+
 */
 
 
@@ -839,8 +845,12 @@ mg_web_process_failover:
 /*
    {
       char bufferx[1024];
-      sprintf(bufferx, "HTTP Response: rc=%d; len_used=%d;", rc, pweb->output_val.svalue.len_used);
+      sprintf(bufferx, "HTTP Response: rc=%d; len_used=%d; response_streamed=%d; response_remaining=%d;", rc, pweb->output_val.svalue.len_used, pweb->response_streamed, pweb->response_remaining);
+#if 1
+      mg_log_buffer(pweb->plog, pweb, pweb->output_val.svalue.buf_addr + 5, 128, bufferx, 0);
+#else
       mg_log_buffer(pweb->plog, pweb, pweb->output_val.svalue.buf_addr + 5, pweb->output_val.svalue.len_used - 5, bufferx, 0);
+#endif
    }
 */
 
@@ -1237,7 +1247,7 @@ mg_web_process_failover:
 /*
       {
          char bufferx[256];
-         sprintf(bufferx, "response_size=%d; buffer_size=%d; response_clen=%d; response_remaining=%d;", pweb->response_size, pweb->output_val.svalue.len_alloc, pweb->response_clen, pweb->response_remaining);
+         sprintf(bufferx, "response_size=%d; buffer_size=%d; response_clen=%d; response_remaining=%d; response_streamed=%d;", pweb->response_size, pweb->output_val.svalue.len_alloc, pweb->response_clen, pweb->response_remaining, pweb->response_streamed);
          mg_log_event(pweb->plog, pweb, bufferx, "netx_tcp_read: response_remaining", 0);
       }
 */
@@ -1309,6 +1319,11 @@ mg_web_process_failover:
    }
 
 mg_web_exit:
+
+   if (pweb->protocol_distressed) { /* CMT54 */
+      /* mg_log_event(pweb->plog, pweb, "Transmission protocol distressed - connection closed", "Error Condition", 0); */
+      close_connection = 1;
+   }
 
    DBX_TRACE(90)
    mg_cleanup(pweb);
@@ -3433,6 +3448,7 @@ __try {
    pweb->response_headers = NULL;
    pweb->response_headers_long = NULL; /* v2.8.43 */
    pweb->response_headers_alloc = 0; /* v2.8.43 */
+   pweb->protocol_distressed = 0; /* CMT54 */
 
    pweb->wstype = wstype; /* v2.7.33 */
    pweb->evented = 0;
@@ -9148,6 +9164,8 @@ __try {
    rc = CACHE_SUCCESS;
    pval = &(pweb->output_val);
 
+netx_tcp_read_stream_start:
+
    if (pweb->response_streamed == 2) { /* ASCII stream mode */
 
       pweb->response_remaining = 0;
@@ -9163,14 +9181,24 @@ __try {
          eos = 0;
          get = (pval->svalue.len_alloc - (pval->svalue.len_used + DBX_HEADER_SIZE));
          while (get) {
-            rc = netx_tcp_read(pweb, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, get, pcon->timeout, 0);
+            rc = netx_tcp_read(pweb, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, get, pweb->protocol_distressed ? 5 : pcon->timeout, 0);
 /*
             {
                char bufferx[256];
                sprintf(bufferx, "ASCII stream response from DB Server: rc=%d; len_used=%d; get=%d;", rc, pval->svalue.len_used, get);
+#if 0
+               mg_log_event(pweb->plog, pweb, bufferx, "netx_tcp_read_stream", 0);
+#elif 1
+               mg_log_buffer(pweb->plog, pweb, pval->svalue.buf_addr, (rc > 0 ? 200 : 0), bufferx, 0);
+#else
                mg_log_buffer(pweb->plog, pweb, pval->svalue.buf_addr, pval->svalue.len_used + (rc > 0 ? rc : 0), bufferx, 0);
+#endif
             }
 */
+            if (pweb->protocol_distressed && rc == NETX_READ_TIMEOUT) { /* CMT54 */
+               eos = 1;
+               break;
+            }
             if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.49 */
                break;
             }
@@ -9198,6 +9226,12 @@ __try {
          }
 
          MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, pval->svalue.buf_addr, pval->svalue.len_used);
+
+         if (pweb->protocol_distressed && eos) { /* CMT54 */
+            pweb->response_remaining = 0;
+            rc = CACHE_SUCCESS;
+            break;
+         }
 
          if (pval->svalue.len_used > 4) {
             if (eos) {
@@ -9234,6 +9268,7 @@ __try {
                }
                else {
                   /* 2.0.8 */
+                  /* mg_log_event(pweb->plog, pweb, "mg_extend_response_memory", "netx_tcp_read_stream", 0); */
                   pval = mg_extend_response_memory(pweb);
                   if (!pval) {
                      rc = NETX_READ_ERROR;
@@ -9254,10 +9289,32 @@ __try {
       }
       if (pweb->db_chunk_head[0] == 0xff && pweb->db_chunk_head[1] == 0xff && pweb->db_chunk_head[2] == 0xff && pweb->db_chunk_head[3] == 0xff) {
          pweb->response_remaining = 0;
-         MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
+         if (pweb->plog->log_frames) {
+            char bufferx[256]; if (pweb->response_remaining > 0) sprintf(bufferx, "%sResponse from DB Server: 0x%02x%02x%02x%02x (%lu Bytes; sort=%d; type=%d)", pweb->response_streamed ? "Chunked " : "", (unsigned char)pweb->db_chunk_head[3], (unsigned char)pweb->db_chunk_head[2], (unsigned char)pweb->db_chunk_head[1], (unsigned char)pweb->db_chunk_head[0], (unsigned long)pweb->response_remaining, pweb->output_val.sort, pweb->output_val.type); else sprintf(bufferx, "%sResponse from DB Server: 0x%02x%02x%02x%02x (EOF)", pweb->response_streamed ? "Chunked " : "", (unsigned char)pweb->db_chunk_head[3], (unsigned char)pweb->db_chunk_head[2], (unsigned char)pweb->db_chunk_head[1], (unsigned char)pweb->db_chunk_head[0]); mg_log_event(pweb->plog, pweb, bufferx, "mg_web: Read response", 0);
+         };
          return CACHE_SUCCESS;
       }
       pweb->response_remaining = mg_get_size((unsigned char *) pweb->db_chunk_head);
+/*
+      {
+         char bufferx[256];
+         pweb->db_chunk_head[4] = '\0';
+         sprintf(bufferx, "Chunk header from DB Server (1): size=%d; head=%s;", pweb->response_remaining, pweb->db_chunk_head);
+         mg_log_event(pweb->plog, pweb, bufferx, "netx_tcp_read_stream", 0);
+      }
+*/
+      if (pweb->response_remaining > DBX_LS_BUFFER_ISC) { /* CMT54 this scenario suggests a broken block write protocol */
+         char bufferx[256];
+         sprintf(bufferx, "Invalid buffer returned from DB Server (size=%d; context=1). Consider using the 'streamascii' transmission protocol.", pweb->response_remaining);
+         mg_log_event(pweb->plog, pweb, bufferx, "mg_web: buffer size error", 0);
+         memcpy((void *) (pval->svalue.buf_addr + pval->svalue.len_used), (void *) pweb->db_chunk_head, 4);
+         pval->svalue.len_used += 4;
+         pcon->stream_tail_len = 0;
+         pweb->response_size += 4;
+         pweb->protocol_distressed = 1;
+         pweb->response_streamed = 2;
+         goto netx_tcp_read_stream_start;
+      }
       MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
    }
 
@@ -9266,11 +9323,28 @@ __try {
    }
 
    for (;;) {
-      rc = netx_tcp_read(pweb, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, pweb->response_remaining, pcon->timeout, 1);
+      /* v2.8.45 make sure that our buffer is large enough to accommodate a DB Server chunk */
+      if (pweb->response_remaining >= (unsigned int) (pval->svalue.len_alloc - pval->svalue.len_used)) {
+         /* v2.8.46 cope with scenario where we don't have enough buffer space to accommodate a single DB Server chunk of response data */
+/*
+         {
+            char buffer[256];
+            sprintf(buffer, "insufficient buffer space to hold DB Server response chunk (bytes available=%d; required=%d)", (int) pval->svalue.len_alloc, (int) pweb->response_remaining);
+            mg_log_event(pweb->plog, pweb, buffer, "mg_web: buffer size error - contact mg_web support", 0);
+            rc = NETX_READ_ERROR;
+            break;
+         }
+*/
+         get = (int) (pval->svalue.len_alloc - pval->svalue.len_used);
+      }
+      else {
+         get = pweb->response_remaining;
+      }
+      rc = netx_tcp_read(pweb, (unsigned char *) pval->svalue.buf_addr + pval->svalue.len_used, get, pcon->timeout, 1);
 /*
       {
          char bufferx[256];
-         sprintf(bufferx, "Chunked response from DB Server: rc=%d; pweb->response_remaining=%d;", rc, pweb->response_remaining);
+         sprintf(bufferx, "Chunked response from DB Server: rc=%d; get=%d; pweb->response_remaining=%d;", rc, get, pweb->response_remaining);
          mg_log_event(pweb->plog, pweb, bufferx, "mg_web: Read response", 0);
       }
 */
@@ -9281,22 +9355,37 @@ __try {
 
       MG_LOG_RESPONSE_BUFFER(pweb, pweb->db_chunk_head, (pval->svalue.buf_addr + pval->svalue.len_used), pweb->response_remaining);
 
-      pval->svalue.len_used += pweb->response_remaining;
-      pweb->response_size += pweb->response_remaining;
+      pval->svalue.len_used += get;
+      pweb->response_size += get;
+      pweb->response_remaining -= get;
 
-      rc = netx_tcp_read(pweb, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
-      if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.49 */
-         break;
-      }
+      if (pweb->response_remaining == 0) { /* get next DB Server chunk */
+         rc = netx_tcp_read(pweb, (unsigned char *) pweb->db_chunk_head, 4, pcon->timeout, 1);
+         if (rc == NETX_READ_TIMEOUT || rc == NETX_READ_EOF || rc == NETX_READ_ERROR) { /* v2.8.49 */
+            break;
+         }
 
-      if (pweb->db_chunk_head[0] == 0xff && pweb->db_chunk_head[1] == 0xff && pweb->db_chunk_head[2] == 0xff && pweb->db_chunk_head[3] == 0xff) {
-         pweb->response_remaining = 0;
+         if (pweb->db_chunk_head[0] == 0xff && pweb->db_chunk_head[1] == 0xff && pweb->db_chunk_head[2] == 0xff && pweb->db_chunk_head[3] == 0xff) {
+            pweb->response_remaining = 0;
+            MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
+            rc = CACHE_SUCCESS;
+            break;
+         }
+         pweb->response_remaining = mg_get_size((unsigned char *) pweb->db_chunk_head);
+         if (pweb->response_remaining > DBX_LS_BUFFER_ISC) { /* CMT54 this scenario suggests a broken block write protocol */
+            char bufferx[256];
+            sprintf(bufferx, "Invalid buffer returned from DB Server (size=%d; context=2). Consider using the 'streamascii' transmission protocol.", pweb->response_remaining);
+            mg_log_event(pweb->plog, pweb, bufferx, "mg_web: buffer size error", 0);
+            memcpy((void *) (pval->svalue.buf_addr + pval->svalue.len_used), (void *) pweb->db_chunk_head, 4);
+            pval->svalue.len_used += 4;
+            pcon->stream_tail_len = 0;
+            pweb->response_size += 4;
+            pweb->protocol_distressed = 1;
+            pweb->response_streamed = 2;
+            break;
+         }
          MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
-         rc = CACHE_SUCCESS;
-         break;
       }
-      pweb->response_remaining = mg_get_size((unsigned char *) pweb->db_chunk_head);
-      MG_LOG_RESPONSE_FRAME(pweb, pweb->db_chunk_head, pweb->response_remaining);
       /* if ((pval->svalue.len_used + pweb->response_size) > (unsigned int) (pval->svalue.len_alloc - DBX_HEADER_SIZE)) { */
       if ((pval->svalue.len_used + pweb->response_remaining) > (unsigned int) (pval->svalue.len_alloc - DBX_HEADER_SIZE)) { /* v2.1.14 */
 /*
@@ -9330,6 +9419,11 @@ __try {
          }
       }
    }
+
+   if (pweb->protocol_distressed && pweb->response_streamed == 2) {
+      goto netx_tcp_read_stream_start;
+   }
+
    return rc;
 
 #ifdef _WIN32

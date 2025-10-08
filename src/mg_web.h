@@ -1311,6 +1311,7 @@ typedef struct tagMGWEB {
    char           request_content_type[1024];
    char           boundary[256]; /* v2.1.15 */
    char           *request_cookie;
+   int            protocol_distressed; /* CMT54 */
    int            response_clen_server;
    int            response_streamed;
    int            response_chunked;
