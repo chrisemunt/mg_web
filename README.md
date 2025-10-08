@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-5 October 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+8 October 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 43d.
+* Current Release: Version: 2.8; Revision 43e.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -383,6 +383,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
 ### v2.8.43d (5 October 2025):
    * Introduce additional checks for clients terminating their request before a full response has been delivered.
    * Improve the performance of requests where the response payload is delivered as the output from the web function (i.e. non-stream mode).
+
+### v2.8.43e (8 October 2025):
+   * Introduce additional integrity checks for the data block transmission protocol between the DB Server and **mg\_web** (as used in $$stream^%zmgsis()).  If this protocol becomes corrupted on account of application code resetting the DB Server's primary device, the 4-Byte header representing the following data size is lost from the transmission.  If **mg\_web** detects this fault, it will immediately switch to plain data stream mode (as used in streamascii^%zmgsis()) and the following message will be written to the event log:
+      * "Invalid buffer returned from DB Server (size=825318267; context=1). Consider using the 'streamascii' transmission protocol." 
 
 
  
