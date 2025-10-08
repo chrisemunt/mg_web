@@ -192,9 +192,9 @@ static int mg_handler(request_rec *r)
    apr_status_t rv;
    MGWEB *pweb;
    MGWEBAPACHE mgwebapache, *pwebapache;
-   apr_table_t *e = r->subprocess_env;
+   /* apr_table_t *e = r->subprocess_env; */
    conn_rec *c = r->connection;
-   struct ap_filter_t *cur = NULL;
+   /* struct ap_filter_t *cur = NULL; */
 
 #ifdef _WIN32
 __try {
@@ -318,7 +318,7 @@ __try {
    if (pval) {
       strcpy((char *) buffer, pval);
       mg_lcase((char *) buffer);
-      if (strstr(buffer, "chunked")) {
+      if (strstr((char *) buffer, "chunked")) {
          request_chunked = 1;
          request_clen = 0;
       }
@@ -460,7 +460,7 @@ static const char *mg_cmd(cmd_parms *cmd, void *dconf, const char *args)
 
 static int mg_init(apr_pool_t *pPool, apr_pool_t *pLog, apr_pool_t *pTemp, server_rec *s)
 {
-   char *sname = s->server_hostname;
+   /* char *sname = s->server_hostname; */
    mg_conf *sconf;
 
    sconf = (mg_conf *) ap_get_module_config(s->module_config, &mg_web_module);
@@ -483,7 +483,7 @@ static int mg_init(apr_pool_t *pPool, apr_pool_t *pLog, apr_pool_t *pTemp, serve
 
 static void mg_child_init(apr_pool_t *p, server_rec *s)
 {
-   char *sname = s->server_hostname;
+   /* char *sname = s->server_hostname; */
 
    apr_pool_cleanup_register(p, s, mg_child_exit, mg_child_exit);
 
@@ -1882,7 +1882,7 @@ int mg_websocket_write(MGWEB *pweb, char *buffer, int len)
       mg_log_buffer(pweb->plog, pweb, buffer, len, bufferx, 0);
    }
 */
-
+   rc = 0;
    if (ap_fwrite(pwebapache->of, pwebapache->obb, (const char *) buffer, (apr_size_t) len) == APR_SUCCESS) { /* Payload Data */
       rc = len;
    }
