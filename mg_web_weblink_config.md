@@ -139,7 +139,7 @@ Paste the code below into it:
            ;
            new %s,%rc,%def,%ct,%KEY,%KEYHEAD,%MPC
            kill ^MGW("MPC",$J)
-           set %s=$$stream^%zmgsis(.%sys)
+           set %s=$$streamascii^%zmgsis(.%sys)
            set %rc=$$nvpair^%zmgsis(.%KEY,$get(%CGIEVAR("QUERY_STRING")))
            set %rc=$$content^%zmgsis(.%KEY,.%KEYHEAD,.%content,.%CGIEVAR)
            set %KEY("MGWLPN")=$get(%sys("server"))
