@@ -207,7 +207,7 @@ int mg_websocket_check(MGWEB *pweb)
       /* const char *origin = apr_table_get(pRCB->r->headers_in, "Origin"); */
       /* TODO : We need to validate the Host and Origin */
 
-      pweb->pwsock = (MGWEBSOCK *) mg_malloc(pweb->pweb_server, sizeof(MGWEBSOCK), 0);
+      pweb->pwsock = (MGWEBSOCK *) mg_malloc(pweb->pweb_server, sizeof(MGWEBSOCK), MG_MID_WEBSOCKET);
       memset((void *) pweb->pwsock, 0, sizeof(MGWEBSOCK));
       pweb->pwsock->closing = 0;
       pweb->pwsock->status = MG_WEBSOCKET_NOCON;
