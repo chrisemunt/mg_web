@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-30 October 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+2 November 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 43f.
+* Current Release: Version: 2.8; Revision 43g.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -394,4 +394,5 @@ Unless required by applicable law or agreed to in writing, software distributed 
       * Use log level 'C' to record when DB Server connections are created/reused and released/closed.
       * Example: log_level ec (record errors and basic connection management).
 
- 
+### v2.8.43g (2 November 2025):
+   * Correct the order in which network errors are written to the event log.
