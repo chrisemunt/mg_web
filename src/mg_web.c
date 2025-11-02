@@ -252,6 +252,8 @@ Version 2.8.43f 30 October 2025: CMT55
    - Use log level 'C' to record when DB Server connections are created/reused and released/closed.
    - Example: log_level ec (record errors and basic connection management).
 
+Version 2.8.43g 2 November 2025: CMT56
+   Correct the order in which network errors are written to the event log.
 */
 
 
@@ -1030,8 +1032,12 @@ mg_web_process_failover:
 
       /* mg_log_buffer(pweb->plog, pweb, pweb->response_headers, pweb->response_headers_len, "Parsed Response Headers", 0); */
    }
-   else { /* v2.1.13 */
+   else { /* (rc != CACHE_SUCCESS) */ /* v2.1.13 */
       DBX_TRACE(42)
+
+      if (mg_system.log.log_errors && pweb->error[0]) { /* CMT56 */
+         mg_log_event(&(mg_system.log), pweb, pweb->error, "mg_web: error", 0);
+      }
 
       if (pweb->mg_connect_failed) { /* v2.4.24 only mark a server offline on account of a new connection failure */
          mg_server_offline(pweb, pweb->psrv, info, 1);
@@ -1072,9 +1078,11 @@ mg_web_process_failover:
       if (pweb->error[0]) {
          pweb->response_content = (char *) pweb->error;
          pweb->response_clen = (int) strlen(pweb->error);
+/*       CMT56
          if (mg_system.log.log_errors) {
             mg_log_event(&(mg_system.log), pweb, pweb->error, "mg_web: error", 0);
          }
+*/
       }
       pweb->response_headers = mg_web_response_headers_buffer(pweb, DBX_HEADER_SIZE, 8); /* CMT53 */
       if (!pweb->response_headers) {
