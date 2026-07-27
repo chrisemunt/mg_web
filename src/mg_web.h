@@ -5,7 +5,7 @@
    |              and YottaDB API                                             |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2025 MGateway Ltd                                     |
+   | Copyright (c) 2019-2026 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -1123,6 +1123,7 @@ typedef struct tagMGSRV {
    unsigned long     no_requests;
    time_t            time_offline; /* v2.2.20 */
    int               idle_timeout; /* v2.4.26 */
+   int               connection_test; /* CMT57 */
    int               health_check;  /* v2.2.20 */
    int               con_retry_time; /* v2.4.25 */
    int               con_retry_no;

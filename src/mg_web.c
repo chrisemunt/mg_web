@@ -4,7 +4,7 @@
    | Description: HTTP Gateway for InterSystems Cache/IRIS and YottaDB        |
    | Author:      Chris Munt cmunt@mgateway.com                               |
    |                         chris.e.munt@gmail.com                           |
-   | Copyright (c) 2019-2025 MGateway Ltd                                     |
+   | Copyright (c) 2019-2026 MGateway Ltd                                     |
    | Surrey UK.                                                               |
    | All rights reserved.                                                     |
    |                                                                          |
@@ -254,6 +254,14 @@ Version 2.8.43f 30 October 2025: CMT55
 
 Version 2.8.43g 2 November 2025: CMT56
    Correct the order in which network errors are written to the event log.
+
+Version 2.8.43h 27 July 2026: CMT57
+   Introduce a round-trip network test on pool connections before committing to use them for processing web requests.
+   - This enhancement should reduce the number of request failures occurring on account of connection breakages.
+   - This behaviour can be switched-off by adding the following parameter to the 'server' section of the configuration.
+   - connection_test off
+
+
 */
 
 
@@ -841,13 +849,46 @@ mg_web_process_failover:
    {
       int n;
       for (n = 0; n < 3; n ++) {
-         netx_tcp_ping(pcon, pweb, 0);
+         netx_tcp_ping(pweb, 0);
       }
    }
 */
 
    DBX_TRACE(24)
-   rc = mg_web_execute(pweb);
+
+   /* CMT57 */
+   if (pweb->pcon->psrv->connection_test) {
+      rc = netx_tcp_ping(pweb, 0);
+/*
+      {
+         char buffer[512];
+         sprintf(buffer, "Connection created: DB Server %s (%s:%d) address=%p; socket=%d; rc=%d;", (char *) pweb->pcon->psrv->name, (char *) pweb->pcon->psrv->ip_address, pweb->pcon->psrv->port, pweb->pcon, (int) pweb->pcon->cli_socket, rc);
+         mg_log_event(pweb->plog, pweb, buffer, "mg_web: connections: netx_tcp_ping", 0);
+      }
+*/
+      if (rc == CACHE_SUCCESS) {
+         DBX_TRACE(25)
+         rc = mg_web_execute(pweb);
+      }
+      else {
+         DBX_TRACE(26)
+         netx_tcp_disconnect(pweb, 0); /* CMT55 */
+         DBX_TRACE(27)
+         rc = mg_connect(pweb, 1);
+         if (rc == CACHE_SUCCESS) {
+            if (pweb->plog->log_connections) { /* CMT55 */
+               char buffer[512];
+               sprintf(buffer, "Connection created: DB Server %s (%s:%d) address=%p; socket=%d; created due to connection_test failure", (char *) pweb->pcon->psrv->name, (char *) pweb->pcon->psrv->ip_address, pweb->pcon->psrv->port, pweb->pcon, (int) pweb->pcon->cli_socket);
+               mg_log_event(pweb->plog, pweb, buffer, "mg_web: connections", 0);
+            }
+            DBX_TRACE(28)
+            rc = mg_web_execute(pweb);
+         }
+      }
+   }
+   else {
+      rc = mg_web_execute(pweb);
+   }
 
    /* v2.7.33 */
 /*
@@ -4705,6 +4746,7 @@ __try {
                   psrv->time_offline = 0;
                   /* v2.4.26 */
                   psrv->idle_timeout = 0;
+                  psrv->connection_test = 1; /* CMT57 */
                   psrv->health_check = 0;
                   /* v2.8.42 default to network connection */
                   psrv->net_connection = 1;
@@ -4866,6 +4908,15 @@ __try {
                   }
                   else if (!strcmp(word[0], "idle_timeout")) { /* v2.4.26 */
                      psrv->idle_timeout = (int) strtol(word[1], NULL, 10);
+                  }
+                  else if (!strcmp(word[0], "connection_test")) { /* CMT57 */
+                     mg_lcase(word[1]);
+                     if (!strncmp(word[1], "off", 3)) {
+                        psrv->connection_test = 0;
+                     }
+                     else {
+                        psrv->connection_test = 1;
+                     }
                   }
                   else if (!strcmp(word[0], "health_check")) { /* v2.2.20 */
                      psrv->health_check = (int) strtol(word[1], NULL, 10);
