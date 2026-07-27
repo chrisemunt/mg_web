@@ -3,9 +3,9 @@
 A High speed web server extension for InterSystems Cache/IRIS, YottaDB and JavaScript.
 
 Chris Munt <cmunt@mgateway.com>  
-2 November 2025, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
+27 July 2026, MGateway Ltd [http://www.mgateway.com](http://www.mgateway.com)
 
-* Current Release: Version: 2.8; Revision 43g.
+* Current Release: Version: 2.8; Revision 43h.
 * [Release Notes](#relnotes) can be found at the end of this document.
 
 ## Overview
@@ -110,7 +110,7 @@ Full documentation for building, deploying and using **mg\_web** will be found i
 
 ## License
 
-Copyright (c) 2019-2025 MGateway Ltd,
+Copyright (c) 2019-2026 MGateway Ltd,
 Surrey UK.                                                      
 All rights reserved.
 
@@ -396,3 +396,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 ### v2.8.43g (2 November 2025):
    * Correct the order in which network errors are written to the event log.
+
+### v2.8.43h (27 July 2026):
+   * Introduce a round-trip network test on pool connections before committing to use them for processing web requests.
+      * This enhancement should reduce the number of request failures occurring on account of connection breakages.
+      * This behaviour can be switched-off by adding the following parameter to the 'server' section of the configuration.
+      * connection_test off
+
