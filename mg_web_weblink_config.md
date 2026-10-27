@@ -167,6 +167,7 @@ Paste the code below into it:
            . . set %KEY(name)="1#1~0~"_lendata_"~"_$get(%KEYHEAD(name,"Content-Type"))_"~"_filename
            . . QUIT
            . QUIT
+           if $data(%KEY("MGWCHD")) set %KEY("MGWCHD")=+$get(%KEY("MGWCHD")) ; MGWCHD must be numeric
            do weblink(.%CGIEVAR,.%KEY,.%MPC)
            QUIT %s
            ;
